@@ -30,23 +30,41 @@ La lente en una frase: **cuanto más escribís en el hilo (archivos inline, prom
 largos, sin skills/distill/sub-agentes), más grande el prefijo → más cache-read en
 cada turno siguiente.** claudit te muestra exactamente dónde.
 
-## Instalación (plugin de Claude Code)
+## Instalación
 
-Desde Claude Code:
+**Dentro de Claude Code** (en el input de Claude Code, no en la terminal):
 
 ```
 /plugin marketplace add SebasCouto/claudit
 /plugin install claudit@claudit
 ```
 
-Listo — tenés el comando `/claudit` disponible en **todos** tus repos.
+**O desde la terminal**, con el binario `claude`:
+
+```bash
+claude plugin marketplace add SebasCouto/claudit
+claude plugin install claudit@claudit
+```
+
+Una vez instalado, el comando `/claudit:claudit` queda disponible en **todos** tus
+repos — tipeás `/` y aparece en el autocomplete:
+
+![El comando /claudit:claudit en el autocomplete de Claude Code](assets/slash-command.png)
+
+> **¿No aparece el comando recién instalado?** Los slash-commands de un plugin se
+> registran al **arrancar** la sesión. Recargá: en VSCode `Cmd+Shift+P → Reload
+> Window`; en la CLI, salí y reabrí `claude`. Después, tipeando `/` en el input
+> tenés que ver `claudit`.
 
 ## Uso
 
 ```
-/claudit             # resumen + composición del cache-read del repo actual
-/claudit --detalle   # + una fila por inferencia (la rampa completa)
+/claudit:claudit             # resumen + composición del cache-read del repo actual
+/claudit:claudit --detalle   # + una fila por inferencia (la rampa completa)
 ```
+
+> El comando queda con namespace `plugin:comando` (por eso `claudit:claudit`).
+> Tipeá `/claudit` y el autocomplete lo completa.
 
 El plugin resuelve solo qué proyecto medir: usa `$CLAUDE_PROJECT_DIR` (el repo donde
 estás), así que aunque el plugin viva centralizado, mide **tu** sesión actual.
@@ -73,6 +91,24 @@ python3 plugin/claude-code/claudit.py <uuid|archivo.jsonl>   # una sesión puntu
 - **Total real, reparto estimado.** El total de cache-read es de la API (real); el
   reparto interno del prefijo se estima del contenido del transcript, calibrado
   contra el prefijo real, y se declara como tal en la salida.
+
+## Desarrollo
+
+La versión del plugin vive en dos manifests que deben coincidir:
+`plugin/claude-code/.claude-plugin/plugin.json` y el entry del plugin en
+`.claude-plugin/marketplace.json`. Un git hook los mantiene sincronizados y
+**auto-incrementa el patch** cada vez que commiteás cambios bajo `plugin/claude-code/`
+(los commits que solo tocan docs o tooling no bumpean). Activalo una vez tras clonar:
+
+```bash
+git config core.hooksPath githooks
+```
+
+Bump manual de `minor` / `major` cuando corresponda:
+
+```bash
+python3 scripts/bump_version.py minor   # o: major
+```
 
 ## Licencia
 

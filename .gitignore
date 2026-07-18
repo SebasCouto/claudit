@@ -10,3 +10,6 @@ venv/
 *.swp
 .idea/
 .vscode/
+
+# claudit report output (el dir se auto-ignora con su propio .gitignore; esto es doble seguro)
+.claudit/

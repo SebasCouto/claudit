@@ -12,6 +12,29 @@ del plugin vive en `plugin/claude-code/.claude-plugin/plugin.json` y se espeja e
 
 _Sin cambios pendientes._
 
+## [1.1.0] - 2026-07-18
+
+### Added
+
+- **Reporte HTML (`claudit --html`)**: reporte self-contained (dark-only, cero
+  dependencias, charts dibujados en `<canvas>`) con la **composición del cache-read**,
+  el **cache-write por inferencia**, KPI cards, **tooltips explicativos** por barra y
+  por KPI, y una sección **Prioridad de mejora** (las mayores palancas, con el disclaimer
+  de "visibilidad, no receta").
+- Cada gráfico muestra su **% del total de tokens** de la sesión — en el cache-read eso
+  es *cuánto contexto reenviás cada turno* (la métrica que resume todo).
+- Salida a un directorio **auto-ignorante** `.claudit/` (con su propio `.gitignore` = `*`):
+  el reporte nunca aparece en el working tree del repo del usuario, sin tocar su `.gitignore`.
+- **Identidad visual**: favicon (barras cyan) embebido en el reporte + `assets/favicon.svg`,
+  banner de portada y capturas por funnel en el README.
+
+### Changed
+
+- README: banner de portada que espeja el favicon, framing reforzado (claudit es un
+  **medidor**, no una receta), línea de licencia centrada.
+- La descripción del chart de cache-write aclara cuándo aparecen picos EXTRA (tras
+  `/compact`, hueco `>5 min` por TTL, o contenido nuevo grande).
+
 ## [1.0.1] - 2026-07-18
 
 Primera versión publicada de claudit como plugin de Claude Code.

@@ -9,8 +9,13 @@
 #   input       -> input fresco no cacheado (tu prompt + tool results del turno)
 #   output      -> mi respuesta (lo mas caro)
 #
-# Como plugin de Claude Code:   /claudit          /claudit --detalle
-# Como CLI standalone:          python3 claudit.py [--detalle] [<archivo.jsonl | uuid>]
+# Como plugin de Claude Code:   /claudit          /claudit --detalle          /claudit --html
+# Como CLI standalone:          python3 claudit.py [--detalle] [--html [ruta]] [<archivo.jsonl | uuid>]
+#
+# --html [ruta]  ademas del reporte de texto, escribe un reporte HTML self-contained
+#                (charts en canvas, dark/light) en `ruta`, o en REPO/.claudit/report.html
+#                si no se especifica. Crea REPO/.claudit/.gitignore con "*" para que el
+#                reporte nunca quede en el working tree del repo del usuario.
 #
 # Resuelve QUE proyecto medir por $CLAUDE_PROJECT_DIR (cuando corre como plugin)
 # o, si no esta seteado, por el directorio actual (cwd). Asi mide el repo donde
@@ -30,6 +35,8 @@
 # del transcript (calibrado contra el prefijo real) y se declara como tal.
 #
 # Corre igual en macOS/Linux/Windows. Motor unico, sin dependencias externas.
+import base64
+import html
 import json
 import os
 import re
@@ -384,11 +391,479 @@ def imprimir_composicion(comp, setup, acum_read):
         linea("mis respuestas (thinking+texto+tool calls)", comp["output"], 8)
 
 
+# ============================================================================
+# --html: reporte HTML self-contained (house-style de evidence-report/qa-deliverable).
+# Cero red, cero CDN, cero deps: charts en <canvas> dibujados a mano, tema
+# dark/light con toggle persistido, data embebida como JSON inline. Reusa
+# exactamente las mismas funciones que el reporte de texto (composicion_prefijo,
+# desglose_setup, costo, palanca) — ningun numero se recalcula distinto.
+# ============================================================================
+HTML_THEME_KEY = "claudit-theme"
+
+# Favicon inline: barras ascendentes cyan, la identidad visual de claudit. Se
+# embebe como data-URI base64 en el <head> (self-contained, CSP-safe: sin red).
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+    '<rect width="512" height="512" rx="112" fill="#0d1117"/>'
+    '<rect x="104" y="300" width="60" height="108" rx="16" fill="#1fd5f9" opacity=".45"/>'
+    '<rect x="192" y="240" width="60" height="168" rx="16" fill="#1fd5f9" opacity=".62"/>'
+    '<rect x="280" y="172" width="60" height="236" rx="16" fill="#1fd5f9" opacity=".8"/>'
+    '<rect x="368" y="104" width="60" height="304" rx="16" fill="#1fd5f9"/>'
+    "</svg>"
+)
+_FAVICON_B64 = base64.b64encode(_FAVICON_SVG.encode()).decode()
+
+
+def _esc(s):
+    return html.escape(str(s), quote=True)
+
+
+def _tok0(x):
+    return tok(round(x))
+
+
+def _kpi_cards_html(acum, total_usd, crec, n_inferencias):
+    def card(valor, label, desc):
+        return (f'<div class="metric" data-tip="{_esc(desc)}"><strong>{_esc(valor)}</strong>'
+                f'<span>{_esc(label)}</span></div>')
+
+    valores = [
+        (_tok0(acum["read"]), "cache-read total (tok)"),
+        (_tok0(acum["write"]), "cache-write total (tok)"),
+        (_tok0(acum["output"]), "output total (tok)"),
+        (usd(total_usd), "costo total estimado"),
+        ((f"{crec:.1f}x" if crec else "—"), "crecimiento cache-read"),
+        (str(n_inferencias), "inferencias"),
+    ]
+    return "\n".join(card(v, l, d) for (v, l), d in zip(valores, _DESC_KPI))
+
+
+# Textos pedagogicos de los tooltips: que ES cada metrica/componente (no numeros nuevos).
+_DESC_KPI = [
+    "Prefijo cacheado que se re-lee en CADA inferencia, sumado en toda la sesion. "
+    "Cuesta 0.1x un token de input, pero es lo que MAS gasta porque se re-lee siempre.",
+    "Contenido nuevo escrito al cache (una vez por turno). Cuesta 1.25x input; "
+    "se paga una sola vez, no domina el gasto.",
+    "Lo que genera el modelo: thinking + texto + tool calls. El token mas caro (5x input).",
+    "USD estimado = read(0.1x) + write(1.25x) + input(1x) + output(5x), a precios de "
+    "Opus 4.8. Edita PRECIO en el script si cambia.",
+    "Cuanto crecio el cache-read de la 1ra a la ultima inferencia. 10x = al final el "
+    "prefijo re-leido es 10 veces mas grande.",
+    "Llamadas al modelo en la sesion. Una respuesta tuya puede disparar varias (cada "
+    "tool call es una inferencia).",
+]
+
+_DESC_COMP = {
+    "setup fijo": "System prompt + definiciones de tools + CLAUDE.md + skills + hooks "
+                  "que Claude Code auto-carga al arrancar. Piso fijo que se re-lee entero cada turno.",
+    "tus prompts": "El texto que vos escribis. Casi siempre la porcion mas chica del prefijo.",
+    "tool results (total)": "Salida de las herramientas (archivos leidos, comandos, edits, "
+                             "busquedas), acumulada en el hilo y re-leida cada turno.",
+    "mis respuestas": "Mi thinking + texto + tool calls. Todo lo que genero pasa a ser "
+                       "parte del prefijo re-leido en los turnos siguientes.",
+}
+
+_DESC_COMP_HIJOS = {
+    "Read": "Contenido de archivos leidos con Read, acumulado en la sesion.",
+    "Bash": "Salida de comandos Bash, acumulada.",
+    "Edit": "Diffs de ediciones con Edit, acumulados.",
+    "Write": "Contenido de archivos escritos con Write, acumulado.",
+}
+
+
+def _desc_comp_item(label):
+    """Desc pedagogica de una barra de composicion, mapeada por label."""
+    stripped = label.strip()
+    if stripped in _DESC_COMP:
+        return _DESC_COMP[stripped]
+    if stripped.startswith("· "):
+        nombre = stripped[2:].strip()
+        if nombre in _DESC_COMP_HIJOS:
+            return _DESC_COMP_HIJOS[nombre]
+        return f"Salida de la tool {nombre}, acumulada en la sesion."
+    return ""
+
+
+def _items_composicion(comp, acum_read):
+    """Barras horizontales: cada componente del prefijo, con su % y los tokens
+    reales de cache-read que le corresponden (comp/prefijo * acum_read)."""
+    pref = comp["prefijo"] or 1
+    items = []
+
+    def add(label, val, color):
+        if val <= 0:
+            return
+        pct = val / pref
+        items.append({
+            "label": label, "value": round(val, 2), "pct": round(pct, 4),
+            "tokLabel": _tok0(pct * acum_read), "color": color,
+            "desc": _desc_comp_item(label),
+        })
+
+    add("setup fijo", comp["setup"], "neutral")
+    add("tus prompts", comp["prompts"], "primary")
+    tools_tot = sum(comp["tools"].values())
+    add("tool results (total)", tools_tot, "mid")
+    for name, v in sorted(comp["tools"].items(), key=lambda kv: -kv[1]):
+        add(f"  · {name}", v, "mid")
+    add("mis respuestas", comp["output"], "bad")
+    return items
+
+
+def _items_write(filas):
+    return [{
+        "turno": i + 1, "value": f["write"],
+        "desc": f"Turno {i + 1}: tokens nuevos escritos al cache ese turno.",
+    } for i, f in enumerate(filas)]
+
+
+def _aria_composicion(items):
+    partes = [f'{it["label"].strip()} {round(it["pct"] * 100)}% ({it["tokLabel"]} tok)' for it in items]
+    return "Composicion del cache-read por componente del prefijo: " + "; ".join(partes) + "."
+
+
+def _aria_write(items):
+    if not items:
+        return "Cache-write por inferencia: sin datos."
+    pico = max(items, key=lambda it: it["value"])
+    partes = [f'turno {it["turno"]}: {tok(it["value"])} tok' for it in items]
+    return (f"Cache-write por inferencia a lo largo de {len(items)} turnos, "
+            f"pico de {tok(pico['value'])} tok en el turno {pico['turno']}. Detalle: "
+            + ", ".join(partes) + ".")
+
+
+def _tips_html(setup):
+    """Top componentes editables del setup fijo, ordenados por tok/turno desc."""
+    editables = sorted([c for c in setup["componentes"] if c["editable"]], key=lambda c: -c["tok"])[:5]
+    if not editables:
+        return '<li class="muted">No hay componentes editables medibles en esta sesion.</li>'
+    filas = []
+    for c in editables:
+        marca = palanca(c["tok"], True)
+        marca_html = f'<span class="tip-marca">{_esc(marca)}</span>' if marca else '<span class="tip-marca muted">—</span>'
+        filas.append(
+            f'<li>{marca_html} <strong>{_esc(c["label"])}</strong> '
+            f'<span class="muted">— {_tok0(c["tok"])} tok/turno</span></li>'
+        )
+    return "\n".join(filas)
+
+
+def generar_html(jsonl, lineas, filas, destino):
+    """Arma el reporte HTML self-contained y lo escribe en `destino` (Path).
+
+    Crea el dir padre si hace falta. Si el dir padre se llama '.claudit', le
+    escribe ademas un .gitignore con '*' para que el reporte nunca aparezca en
+    el working tree del repo del usuario, sin tocar el .gitignore del usuario.
+    """
+    comp = composicion_prefijo(lineas, filas)
+    setup = desglose_setup(lineas, filas)
+    acum = {k: sum(f[k] for f in filas) for k in ("read", "write", "input", "output")}
+    total_usd = sum(costo(f) for f in filas)
+    crec = filas[-1]["read"] / filas[0]["read"] if filas[0]["read"] else 0
+
+    total_tok = acum["read"] + acum["write"] + acum["input"] + acum["output"]
+    read_pct = round(100 * acum["read"] / total_tok) if total_tok else 0
+    write_pct = round(100 * acum["write"] / total_tok) if total_tok else 0
+
+    items_comp = _items_composicion(comp, acum["read"])
+    items_write = _items_write(filas)
+
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    if destino.parent.name == ".claudit":
+        (destino.parent / ".gitignore").write_text("*\n", encoding="utf-8")
+
+    out = _HTML_TEMPLATE
+    out = out.replace("__CLAUDIT_TITULO__", _esc(f"claudit — {jsonl.stem[:8]}"))
+    out = out.replace(
+        "__CLAUDIT_SUBTITULO__",
+        _esc(f"Sesion {jsonl.stem[:8]} · Proyecto {REPO.name} · {len(filas)} inferencias"),
+    )
+    out = out.replace("__CLAUDIT_BADGE__", _esc(usd(total_usd)))
+    out = out.replace("__CLAUDIT_KPIS__", _kpi_cards_html(acum, total_usd, crec, len(filas)))
+    out = out.replace("__CLAUDIT_TIPS__", _tips_html(setup))
+    out = out.replace("__CLAUDIT_ARIA_COMP__", _esc(_aria_composicion(items_comp)))
+    out = out.replace("__CLAUDIT_ARIA_WRITE__", _esc(_aria_write(items_write)))
+    out = out.replace("__CLAUDIT_COMP_JSON__", json.dumps(items_comp, ensure_ascii=False))
+    out = out.replace("__CLAUDIT_WRITE_JSON__", json.dumps(items_write, ensure_ascii=False))
+    out = out.replace("__CLAUDIT_THEME_KEY__", HTML_THEME_KEY)
+    out = out.replace("__CLAUDIT_FAVICON__", _FAVICON_B64)
+    out = out.replace("__CLAUDIT_READ_PCT__", str(read_pct))
+    out = out.replace("__CLAUDIT_WRITE_PCT__", str(write_pct))
+
+    destino.write_text(out, encoding="utf-8")
+    return destino
+
+
+_HTML_TEMPLATE = """<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__CLAUDIT_TITULO__</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,__CLAUDIT_FAVICON__">
+<style>
+:root{
+  --bg:hsl(220 15% 8%); --surface-1:hsl(220 14% 11%); --surface-2:hsl(220 14% 13%);
+  --ink:hsl(210 20% 92%); --muted:hsl(215 12% 62%); --line:hsl(220 10% 20%);
+  --primary:hsl(190 95% 55%); --primary-ink:hsl(220 30% 8%);
+  --good:hsl(142 65% 48%); --mid:hsl(38 92% 55%); --bad:hsl(0 72% 60%); --neutral:hsl(215 12% 50%);
+  --radius:14px;
+  --font-sans:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --font-mono:'JetBrains Mono','Consolas',monospace;
+}
+*{box-sizing:border-box;}
+body{margin:0;color:var(--ink);background:var(--bg);font-family:var(--font-sans);line-height:1.45;}
+main{max-width:1180px;margin:0 auto;padding:32px 24px;}
+h1{margin:0 0 8px;font-size:clamp(26px,4vw,40px);letter-spacing:-.03em;font-weight:700;}
+h2{margin:0 0 12px;font-size:20px;font-weight:600;}
+h3{margin:0 0 10px;font-size:15px;font-weight:600;}
+.muted{color:var(--muted);font-size:13px;}
+header{border:1px solid var(--line);background:linear-gradient(135deg,var(--surface-2),var(--surface-1));
+  border-radius:20px;padding:26px 30px;}
+.header-top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:8px;}
+.status{display:inline-flex;padding:6px 14px;border-radius:999px;background:var(--primary);color:var(--primary-ink);
+  font:700 15px/1.1 var(--font-mono);letter-spacing:.02em;}
+.actions{display:flex;gap:10px;margin-top:16px;}
+.btn{cursor:pointer;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);
+  border-radius:999px;padding:8px 16px;font:600 13px var(--font-sans);}
+.btn:hover{background:var(--surface-1);}
+.metric-boxes{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-top:22px;}
+@media (max-width:920px){.metric-boxes{grid-template-columns:repeat(3,1fr);}}
+@media (max-width:520px){.metric-boxes{grid-template-columns:repeat(2,1fr);}}
+.metric{border:1px solid var(--line);background:var(--surface-2);border-radius:16px;padding:16px;
+  display:flex;flex-direction:column;align-items:center;text-align:center;gap:4px;}
+.metric strong{font-size:38px;line-height:1.05;}
+.metric>span{color:var(--muted);font-size:13px;}
+.card{border:1px solid var(--line);background:var(--surface-1);border-radius:var(--radius);padding:24px 28px;margin-top:20px;}
+.chart-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;}
+.chart-pct{text-align:right;line-height:1.1;}
+.chart-pct strong{display:block;font-size:34px;font-weight:700;color:var(--primary);}
+.chart-pct span{font-size:12px;color:var(--muted);}
+.chart-wrap{overflow-x:auto;}
+canvas{width:100%;display:block;}
+.tips-intro{margin:0 0 14px;color:var(--muted);font-size:14px;line-height:1.55;}
+.tips-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;}
+.tips-list li{border-bottom:1px solid var(--line);padding-bottom:10px;font-size:14px;}
+.tips-list li:last-child{border-bottom:none;padding-bottom:0;}
+.tip-marca{display:inline-block;min-width:28px;color:var(--bad);font-weight:700;font-family:var(--font-mono);}
+details{border:1px solid var(--line);background:var(--surface-1);border-radius:var(--radius);padding:18px 24px;margin-top:20px;}
+summary{cursor:pointer;font-weight:600;}
+details p{color:var(--muted);font-size:13px;line-height:1.6;margin:10px 0 0;}
+footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
+.metric[data-tip]{cursor:help;}
+#claudit-tip{position:fixed;z-index:50;max-width:300px;padding:10px 12px;background:var(--surface-2);
+  border:1px solid var(--line);border-radius:10px;color:var(--ink);font:13px/1.4 var(--font-sans);
+  box-shadow:0 8px 28px rgba(0,0,0,.45);pointer-events:none;opacity:0;transition:opacity .12s;}
+#claudit-tip.on{opacity:1;}
+#claudit-tip strong{display:block;font-size:13px;margin-bottom:4px;}
+#claudit-tip span{color:var(--muted);}
+</style>
+</head>
+<body>
+<div id="claudit-tip" role="tooltip" aria-hidden="true"></div>
+<main>
+<header>
+  <div class="header-top">
+    <h1>claudit</h1>
+    <span class="status">__CLAUDIT_BADGE__</span>
+  </div>
+  <p class="muted">__CLAUDIT_SUBTITULO__</p>
+  <div class="metric-boxes">
+__CLAUDIT_KPIS__
+  </div>
+</header>
+
+<section class="card">
+  <div class="chart-head">
+    <h2>Cache-read — composicion del prefijo</h2>
+    <div class="chart-pct"><strong>__CLAUDIT_READ_PCT__%</strong><span>del total de tokens · lo que reenvias cada turno</span></div>
+  </div>
+  <p class="muted">Cada barra es un componente del prefijo que se re-lee ENTERO en cada turno. % = componente / prefijo; tok = ese % aplicado al cache-read acumulado REAL de la sesion.</p>
+  <div class="chart-wrap">
+    <canvas id="claudit-chart-comp" height="260" role="img" aria-label="__CLAUDIT_ARIA_COMP__"></canvas>
+  </div>
+  <script type="application/json" id="claudit-data-comp">__CLAUDIT_COMP_JSON__</script>
+</section>
+
+<section class="card">
+  <div class="chart-head">
+    <h2>Cache-write — por inferencia</h2>
+    <div class="chart-pct"><strong>__CLAUDIT_WRITE_PCT__%</strong><span>del total de tokens</span></div>
+  </div>
+  <p class="muted">Una barra por turno. Altura = tokens nuevos escritos al cache ese turno (el contenido que entro y se cacheo). El pico grande esta al arranque (se cachea el setup); despues se escribe algo cada turno segun cuanto contenido nuevo entro. Vas a ver picos EXTRA cuando el cache se re-crea: tras un /compact, tras un hueco de inactividad &gt;5 min (el cache expira, TTL) o al entrar contenido nuevo grande.</p>
+  <div class="chart-wrap">
+    <canvas id="claudit-chart-write" height="220" role="img" aria-label="__CLAUDIT_ARIA_WRITE__"></canvas>
+  </div>
+  <script type="application/json" id="claudit-data-write">__CLAUDIT_WRITE_JSON__</script>
+</section>
+
+<section class="card">
+  <h2>Prioridad de mejora</h2>
+  <p class="tips-intro">claudit muestra las mayores palancas por ahorro potencial por turno. Recortar, reordenar o no tocar nada es tu decisión — esto es visibilidad, no una receta.</p>
+  <ul class="tips-list">
+__CLAUDIT_TIPS__
+  </ul>
+</section>
+
+<details>
+  <summary>Metodologia</summary>
+  <p>El TOTAL de cache-read, cache-write, input y output de la sesion es el dato real que reporta la API de Anthropic (usage de cada inferencia del transcript) — no es una estimacion. El REPARTO interno del cache-read entre setup fijo, prompts, tool results y respuestas se estima por proporcion de caracteres del contenido del transcript, calibrado contra el prefijo real de la ultima inferencia. El total nunca se estima; el desglose interno si, y se declara como tal.</p>
+</details>
+
+<footer><span>claudit · Licencia MIT — software libre, sin garantia</span><br><span class="foot-by">@by SebasCouto</span></footer>
+</main>
+
+<script>
+function claudinTok(name){return getComputedStyle(document.documentElement).getPropertyValue('--'+name).trim();}
+
+function claudinEscHtml(s){
+  var d=document.createElement('div'); d.textContent=(s==null?'':String(s)); return d.innerHTML;
+}
+
+function claudinShowTip(x, y, titulo, desc){
+  var el=document.getElementById('claudit-tip'); if(!el || !desc) return;
+  el.innerHTML='<strong>'+claudinEscHtml(titulo)+'</strong><span>'+claudinEscHtml(desc)+'</span>';
+  el.classList.add('on'); el.setAttribute('aria-hidden','false');
+  var w=el.offsetWidth, h=el.offsetHeight;
+  var left=x+14, top=y+14;
+  if(left+w>window.innerWidth) left=x-w-14;
+  if(top+h>window.innerHeight) top=y-h-14;
+  if(left<0) left=4;
+  if(top<0) top=4;
+  el.style.left=left+'px'; el.style.top=top+'px';
+}
+
+function claudinHideTip(){
+  var el=document.getElementById('claudit-tip'); if(!el) return;
+  el.classList.remove('on'); el.setAttribute('aria-hidden','true');
+}
+
+function claudinWireMetrics(){
+  document.querySelectorAll('.metric[data-tip]').forEach(function(elm){
+    elm.addEventListener('mousemove', function(e){
+      var lbl=elm.querySelector('span');
+      claudinShowTip(e.clientX, e.clientY, lbl?lbl.textContent:'', elm.getAttribute('data-tip'));
+    });
+    elm.addEventListener('mouseout', function(){ claudinHideTip(); });
+  });
+}
+
+function claudinDrawBarsH(canvasId, dataId){
+  var el=document.getElementById(canvasId); if(!el) return;
+  var items; try{items=JSON.parse(document.getElementById(dataId).textContent);}catch(e){return;}
+  if(!items.length) return;
+  var dpr=window.devicePixelRatio||1, W=el.clientWidth||600, rowH=34, H=items.length*rowH+16;
+  el.style.height=H+'px'; el.width=W*dpr; el.height=H*dpr;
+  var c=el.getContext('2d'); c.setTransform(dpr,0,0,dpr,0,0); c.clearRect(0,0,W,H);
+  var max=Math.max.apply(null,items.map(function(i){return i.value;}))||1;
+  var bh=Math.min(24,rowH-10);
+  var rows=[];
+  items.forEach(function(it,k){
+    var y=8+k*rowH;
+    c.fillStyle=claudinTok('ink'); c.font='13px '+claudinTok('font-sans'); c.textAlign='left'; c.textBaseline='middle';
+    c.fillText(it.label,0,y+bh/2);
+    var w=Math.max(2,(W-300)*(it.value/max));
+    c.fillStyle=claudinTok(it.color||'primary'); c.fillRect(120,y,w,bh);
+    var lbl=Math.round(it.pct*100)+'%  '+it.tokLabel+' tok';
+    c.font='12px '+claudinTok('font-sans'); c.textBaseline='middle';
+    if(124+w+c.measureText(lbl).width>W){            // no entra afuera -> adentro, a la derecha de la barra
+      c.textAlign='right'; c.fillStyle=claudinTok('bg'); c.fillText(lbl,116+w,y+bh/2); c.textAlign='left';
+    }else{
+      c.fillStyle=claudinTok('muted'); c.fillText(lbl,124+w,y+bh/2);
+    }
+    rows.push({y0:k*rowH, y1:(k+1)*rowH, label:it.label.trim(), desc:it.desc||''});
+  });
+  el._rows=rows;
+  if(!el._tipWired){
+    el._tipWired=true;
+    el.addEventListener('mousemove', function(e){
+      var rs=el._rows||[], y=e.offsetY, hit=null;
+      for(var i=0;i<rs.length;i++){ if(y>=rs[i].y0 && y<rs[i].y1){ hit=rs[i]; break; } }
+      if(hit && hit.desc){ claudinShowTip(e.clientX, e.clientY, hit.label, hit.desc); } else { claudinHideTip(); }
+    });
+    el.addEventListener('mouseleave', function(){ claudinHideTip(); });
+  }
+}
+
+function claudinDrawBarsV(canvasId, dataId){
+  var el=document.getElementById(canvasId); if(!el) return;
+  var items; try{items=JSON.parse(document.getElementById(dataId).textContent);}catch(e){return;}
+  if(!items.length) return;
+  var dpr=window.devicePixelRatio||1, W=el.clientWidth||600, H=220;
+  el.style.height=H+'px'; el.width=W*dpr; el.height=H*dpr;
+  var c=el.getContext('2d'); c.setTransform(dpr,0,0,dpr,0,0); c.clearRect(0,0,W,H);
+  var max=Math.max.apply(null,items.map(function(i){return i.value;}))||1;
+  var padBottom=26, padTop=10, plotH=H-padBottom-padTop, slot=W/items.length, bw=Math.max(2,slot-4);
+  var cols=[];
+  items.forEach(function(it,k){
+    var h=plotH*(it.value/max), x=k*slot+2;
+    c.fillStyle=claudinTok('primary'); c.fillRect(x,padTop+plotH-h,bw,Math.max(1,h));
+    cols.push({x0:k*slot, x1:(k+1)*slot, turno:it.turno, desc:it.desc||''});
+  });
+  c.strokeStyle=claudinTok('line'); c.beginPath(); c.moveTo(0,padTop+plotH+0.5); c.lineTo(W,padTop+plotH+0.5); c.stroke();
+  c.fillStyle=claudinTok('muted'); c.font='11px '+claudinTok('font-sans'); c.textAlign='center'; c.textBaseline='top';
+  var step=Math.max(1,Math.round(items.length/10));
+  items.forEach(function(it,k){
+    if(k%step===0 || k===items.length-1){
+      c.fillText(String(it.turno), k*slot+2+bw/2, padTop+plotH+6);
+    }
+  });
+  el._cols=cols;
+  if(!el._tipWired){
+    el._tipWired=true;
+    el.addEventListener('mousemove', function(e){
+      var cs=el._cols||[], x=e.offsetX, hit=null;
+      for(var i=0;i<cs.length;i++){ if(x>=cs[i].x0 && x<cs[i].x1){ hit=cs[i]; break; } }
+      if(hit && hit.desc){ claudinShowTip(e.clientX, e.clientY, 'Turno '+hit.turno, hit.desc); } else { claudinHideTip(); }
+    });
+    el.addEventListener('mouseleave', function(){ claudinHideTip(); });
+  }
+}
+
+function claudinDrawAll(){
+  claudinDrawBarsH('claudit-chart-comp','claudit-data-comp');
+  claudinDrawBarsV('claudit-chart-write','claudit-data-write');
+}
+window.addEventListener('resize',claudinDrawAll);
+claudinDrawAll();
+claudinWireMetrics();
+</script>
+</body>
+</html>
+"""
+
+
+def parsear_args(args):
+    """Separa --detalle, --html [ruta] y el argumento posicional (archivo/uuid).
+
+    --html es opcional-con-valor: el token siguiente se toma como ruta destino
+    SOLO si termina en '.html' (si no, es ambiguo con el posicional del
+    transcript — p.ej. `--html sesion.jsonl` no debe robarse el .jsonl como
+    ruta). Sin ruta reconocible, --html usa el default (REPO/.claudit/report.html).
+    """
+    detalle = False
+    quiere_html = False
+    html_ruta = None
+    posicionales = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--detalle":
+            detalle = True
+        elif a == "--html":
+            quiere_html = True
+            if i + 1 < len(args) and args[i + 1].lower().endswith(".html"):
+                html_ruta = args[i + 1]
+                i += 1
+        else:
+            posicionales.append(a)
+        i += 1
+    return detalle, quiere_html, html_ruta, posicionales
+
+
 def main():
-    args = sys.argv[1:]
-    detalle = "--detalle" in args
-    resto = [a for a in args if a != "--detalle"]
-    jsonl = resolver_jsonl(resto[0] if resto else None)
+    detalle, quiere_html, html_ruta_arg, posicionales = parsear_args(sys.argv[1:])
+    jsonl = resolver_jsonl(posicionales[0] if posicionales else None)
     lineas = parsear_lineas(jsonl)
     filas = leer_inferencias(lineas)
     if not filas:
@@ -427,6 +902,11 @@ def main():
     print("Cuanto mas escribis en el hilo (archivos inline, prompts largos, sin")
     print("skills/distill/sub-agentes), mas grande el prefijo -> mas cache-read en")
     print("CADA turno siguiente. El cache-read acumulado es el proxy del gasto.")
+
+    if quiere_html:
+        destino = Path(html_ruta_arg).resolve() if html_ruta_arg else (REPO / ".claudit" / "report.html")
+        generar_html(jsonl, lineas, filas, destino)
+        print(f"Reporte HTML: {destino}")
 
 
 if __name__ == "__main__":

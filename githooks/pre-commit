@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# claudit — auto-bump del patch cuando se commitean cambios del plugin.
+# Activar una vez por clon:  git config core.hooksPath githooks
+set -euo pipefail
+python3 "$(git rev-parse --show-toplevel)/scripts/bump_version.py" --if-plugin-changed

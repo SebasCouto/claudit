@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="claudit">
+  <rect width="512" height="512" rx="112" fill="#0d1117"/>
+  <rect x="104" y="300" width="60" height="108" rx="16" fill="#1fd5f9" opacity=".45"/>
+  <rect x="192" y="240" width="60" height="168" rx="16" fill="#1fd5f9" opacity=".62"/>
+  <rect x="280" y="172" width="60" height="236" rx="16" fill="#1fd5f9" opacity=".8"/>
+  <rect x="368" y="104" width="60" height="304" rx="16" fill="#1fd5f9"/>
+</svg>

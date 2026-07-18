@@ -1,6 +1,6 @@
-# claudit
-
-> Audit the **real** cache-read cost of your Claude Code sessions — see exactly where your tokens go.
+<p align="center">
+  <img src="assets/banner.png" alt="claudit — auditá el cache-read REAL de tus sesiones de Claude Code" width="840">
+</p>
 
 `claudit` (Claude + audit) es un plugin de Claude Code que mide el **cache-read REAL**
 de tu sesión activa —no estimado— leyendo el transcript `.jsonl` que Claude Code
@@ -38,6 +38,24 @@ CLAUDE.md, skills, hooks, tus prompts, resultados de herramientas y mis respuest
 La lente en una frase: **cuanto más se acumula en el hilo, más grande el prefijo →
 más cache-read en cada turno siguiente.** claudit te muestra **cuánto y de qué**; qué
 hacés con eso —si es que hacés algo— queda de tu lado.
+
+### El reporte visual (`claudit --html`)
+
+Además del reporte de terminal, `claudit --html` genera un reporte HTML self-contained
+(dark, cero dependencias, se auto-ignora en `.claudit/`) con el desglose graficado.
+Cada gráfico lleva su **% del total de tokens** — la métrica que resume todo.
+
+**Cache-read — la composición del prefijo.** El ~94% de tus tokens es esto: *lo que
+reenviás en cada turno*. Y fijate que **tus prompts son 0%** — lo caro es todo lo demás
+que se acumula (tool results, setup, respuestas).
+
+![Composición del cache-read por componente](assets/funnel-cache-read.png)
+
+**Cache-write — por inferencia.** El ~5%: contenido nuevo que se cachea. Un pico grande
+al arranque y picos EXTRA cuando el caché se re-crea (tras `/compact`, un hueco `>5 min`
+por expiración del TTL, o al entrar contenido nuevo grande).
+
+![Cache-write por inferencia](assets/funnel-cache-write.png)
 
 ## Instalación
 
@@ -123,4 +141,4 @@ python3 scripts/bump_version.py minor   # o: major
 
 ## Licencia
 
-[MIT](LICENSE) · [Changelog](CHANGELOG.md) · made by [@SebasCouto](https://github.com/SebasCouto)
+<p align="center"><a href="LICENSE">MIT</a> · <a href="CHANGELOG.md">Changelog</a> · made by <a href="https://github.com/SebasCouto">@SebasCouto</a></p>

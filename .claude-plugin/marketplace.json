@@ -1,7 +1,8 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claudit",
-  "description": "Audita el cache-read REAL de tus sesiones de Claude Code y mostrá exactamente qué recortar para gastar menos tokens.",
+  "metadata": {
+    "description": "Audita el cache-read REAL de tus sesiones de Claude Code y mostrá exactamente qué recortar para gastar menos tokens."
+  },
   "owner": {
     "name": "Sebastián Couto",
     "email": "sebastian.o.couto@gmail.com"

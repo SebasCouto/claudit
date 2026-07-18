@@ -8,6 +8,8 @@ escribe en `~/.claude/projects/`. Te dice, con números de la propia API, cuánt
 re-lee en CADA turno, cómo se compone ese prefijo y **qué pieza recortar para gastar
 menos tokens**.
 
+![claudit — reporte de cache-read REAL de una sesión de Claude Code](assets/claudit-demo.png)
+
 ## About
 
 Cada inferencia de Claude Code re-lee el prefijo **entero** de tu contexto como

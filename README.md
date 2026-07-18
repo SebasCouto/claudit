@@ -96,15 +96,17 @@ python3 plugin/claude-code/claudit.py <uuid|archivo.jsonl>   # una sesión puntu
 
 La versión del plugin vive en dos manifests que deben coincidir:
 `plugin/claude-code/.claude-plugin/plugin.json` y el entry del plugin en
-`.claude-plugin/marketplace.json`. Un git hook los mantiene sincronizados y
-**auto-incrementa el patch** cada vez que commiteás cambios bajo `plugin/claude-code/`
-(los commits que solo tocan docs o tooling no bumpean). Activalo una vez tras clonar:
+`.claude-plugin/marketplace.json`. [scripts/bump_version.py](scripts/bump_version.py)
+es la fuente única del bump y sube **ambos manifests en sync**.
 
-```bash
-git config core.hooksPath githooks
-```
+**Automático, vía CI (ante cada PR).** Cuando un PR se mergea a `main` y tocó
+`plugin/claude-code/`, el workflow
+[.github/workflows/version-bump.yml](.github/workflows/version-bump.yml) sube el patch
+en los dos manifests y lo commitea de vuelta a `main` — así `claude plugin update`
+siempre ve la versión nueva. **No requiere setup de los contribuidores.** (Si protegés
+`main` con required-PR, dale al bot permiso de push o usá un PAT.)
 
-Bump manual de `minor` / `major` cuando corresponda:
+**Bump manual** de `minor` / `major` cuando corresponda:
 
 ```bash
 python3 scripts/bump_version.py minor   # o: major

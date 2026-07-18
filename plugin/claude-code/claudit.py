@@ -395,9 +395,9 @@ def main():
         sys.exit("La sesion no tiene inferencias con usage todavia.")
 
     ancho = 22 + 13 + 13 + 11 + 11
-    print(f"Cache-read REAL de la sesion — {REPO.name}")
+    print("claudit — cache-read REAL de la sesion")
     print("=" * ancho)
-    print(f"Sesion: {jsonl.stem[:8]}   Inferencias: {len(filas)}")
+    print(f"Sesion: {jsonl.stem[:8]} ({REPO.name})   Inferencias: {len(filas)}")
     print("-" * ancho)
     print(f"{''.ljust(22)}{'cache-read'.rjust(13)}{'cache-write'.rjust(13)}{'input'.rjust(11)}{'output'.rjust(11)}")
     print("-" * ancho)

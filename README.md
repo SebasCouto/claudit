@@ -1,12 +1,19 @@
 # claudit
 
-> Audit the **real** cache-read cost of your Claude Code sessions — see where your tokens go and what to trim.
+> Audit the **real** cache-read cost of your Claude Code sessions — see exactly where your tokens go.
 
 `claudit` (Claude + audit) es un plugin de Claude Code que mide el **cache-read REAL**
 de tu sesión activa —no estimado— leyendo el transcript `.jsonl` que Claude Code
-escribe en `~/.claude/projects/`. Te dice, con números de la propia API, cuánto se
-re-lee en CADA turno, cómo se compone ese prefijo y **qué pieza recortar para gastar
-menos tokens**.
+escribe en `~/.claude/projects/`. Te da **visibilidad**, con números de la propia API,
+de cuánto se re-lee en CADA turno, cómo se compone ese prefijo y **qué es lo que más
+consume tu contexto** — para que VOS veas si hay margen para mejorar.
+
+> [!IMPORTANT]
+> **claudit da visibilidad, no recetas.** Te muestra QUÉ consume tokens y CUÁNTO —
+> nada más. Qué hacer con esa información —recortar, reordenar, dividir en sub-agentes,
+> o no tocar nada— es **decisión tuya**: claudit **no asume que recortar sea mejor** ni
+> te dice cómo mejorar. Es un **medidor**, no un optimizador. El método de mejora corre
+> por tu cuenta. Mal leído, confunde: no es una lista de cosas para borrar.
 
 ![claudit — reporte de cache-read REAL de una sesión de Claude Code](assets/claudit-demo.png)
 
@@ -24,13 +31,13 @@ CLAUDE.md, skills, hooks, tus prompts, resultados de herramientas y mis respuest
 - **Rampa**: cómo crece el cache-read de la primera a la última inferencia (el `Nx`).
 - **Composición del prefijo**: qué parte del re-leído es setup fijo, tus prompts,
   tool results (por tipo: `Read`, `Bash`, …) y mis respuestas.
-- **Columna de palanca (`*`)**: cuántos tokens/turno editables ahorrarías si
-  recortás cada pieza — `***` ≥ 1000 tok/turno, `**` ≥ 300, `*` < 300, sin marca =
-  base del harness (no editable).
+- **Columna de palanca (`*`)**: el ahorro **potencial** por turno si *decidieras*
+  recortar cada pieza —una oportunidad **medida**, no una recomendación— `***` ≥ 1000
+  tok/turno, `**` ≥ 300, `*` < 300, sin marca = base del harness (no editable).
 
-La lente en una frase: **cuanto más escribís en el hilo (archivos inline, prompts
-largos, sin skills/distill/sub-agentes), más grande el prefijo → más cache-read en
-cada turno siguiente.** claudit te muestra exactamente dónde.
+La lente en una frase: **cuanto más se acumula en el hilo, más grande el prefijo →
+más cache-read en cada turno siguiente.** claudit te muestra **cuánto y de qué**; qué
+hacés con eso —si es que hacés algo— queda de tu lado.
 
 ## Instalación
 
@@ -116,4 +123,4 @@ python3 scripts/bump_version.py minor   # o: major
 
 ## Licencia
 
-[MIT](LICENSE) · made by [@SebasCouto](https://github.com/SebasCouto)
+[MIT](LICENSE) · [Changelog](CHANGELOG.md) · made by [@SebasCouto](https://github.com/SebasCouto)

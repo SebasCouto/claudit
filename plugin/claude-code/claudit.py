@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-# claudit — audita el cache-read REAL de tu sesion de Claude Code (no estimado).
+# claudit — audita el cache-read REAL de la sesion de Claude Code (no estimado).
 # made by @SebasCouto.
 #
 # Lee el transcript .jsonl de la sesion (lo escribe Claude Code en ~/.claude/projects/)
 # y saca de cada inferencia los tokens reales que reporto la API:
 #   cache_read  -> prefijo cacheado, re-leido este turno (0.1x input)
 #   cache_write -> prefijo nuevo escrito al cache (1.25x input, 5 min)
-#   input       -> input fresco no cacheado (tu prompt + tool results del turno)
-#   output      -> mi respuesta (lo mas caro)
+#   input       -> input fresco no cacheado (el prompt del usuario + tool results del turno)
+#   output      -> la respuesta del modelo (lo mas caro)
 #
 # Como plugin de Claude Code:   /claudit          /claudit --detalle          /claudit --html
 # Como CLI standalone:          python3 claudit.py [--detalle] [--html [ruta]] [<archivo.jsonl | uuid>]
@@ -18,12 +18,13 @@
 #                reporte nunca quede en el working tree del repo del usuario.
 #
 # Resuelve QUE proyecto medir por $CLAUDE_PROJECT_DIR (cuando corre como plugin)
-# o, si no esta seteado, por el directorio actual (cwd). Asi mide el repo donde
-# estas parado, no donde vive el script — funciona instalado en cualquier repo.
+# o, si no esta seteado, por el directorio actual (cwd). Asi mide el repo activo,
+# no donde vive el script — funciona instalado en cualquier repo.
 #
 # El resumen desglosa, indentado bajo el cache-read acumulado, QUE compone ese
-# prefijo re-leido: setup fijo (system+tool-defs+CLAUDE.md+skills+hooks), tus
-# prompts, resultados de herramientas (por tipo: Read/Bash/...) y mis respuestas.
+# prefijo re-leido: setup fijo (system+tool-defs+CLAUDE.md+skills+hooks), el
+# prompt del usuario, resultados de herramientas (por tipo: Read/Bash/...) y las
+# respuestas del modelo.
 # El setup fijo se abre a su vez por componente y, dentro de cada CLAUDE.md, por
 # seccion (header), con una columna de palanca = tokens/turno editables que
 # ahorrarias al recortar esa pieza:
@@ -61,7 +62,7 @@ SECC_MINIMA = 200  # secciones de CLAUDE.md por debajo de esto se colapsan en 'r
 
 # El repo cuya sesion medimos: $CLAUDE_PROJECT_DIR (lo inyecta Claude Code al
 # correr como plugin) o, si no esta, el directorio actual. NO la carpeta del
-# script — asi el plugin, aunque viva centralizado, mide el repo donde estas.
+# script — asi el plugin, aunque viva centralizado, mide el repo activo.
 def proyecto_activo():
     env = os.environ.get("CLAUDE_PROJECT_DIR")
     return Path(env).resolve() if env else Path.cwd().resolve()
@@ -138,6 +139,7 @@ def leer_inferencias(lineas):
             "write": write_tokens(u),
             "input": u.get("input_tokens", 0) or 0,
             "output": u.get("output_tokens", 0) or 0,
+            "ts": entry.get("timestamp") if isinstance(entry, dict) else None,
         })
     return filas
 
@@ -148,7 +150,8 @@ def costo(f):
 
 
 def usd(x):
-    return f"${x:,.4f}"
+    # 2 decimales para montos >= $1 ($167.24); 4 para los chicos ($0.0050) donde importa.
+    return f"${x:,.2f}" if abs(x) >= 1 else f"${x:,.4f}"
 
 
 def tok(n):
@@ -176,7 +179,7 @@ def chars_texto(x):
 
 
 def chars_salida(b):
-    """Chars de un bloque de mi respuesta (text / thinking / tool_use)."""
+    """Chars de un bloque de la respuesta del modelo (text / thinking / tool_use)."""
     bt = b.get("type")
     if bt == "text":
         return len(b.get("text", "") or "")
@@ -192,8 +195,8 @@ def composicion_prefijo(lineas, filas):
 
     El 'setup fijo' (system + tool-defs + CLAUDE.md + skills + hooks iniciales) se
     mide con el prefijo REAL de la 1a inferencia — no vive como texto en el
-    transcript, pero la API ya lo cacheo ahi. El resto (tus prompts, resultados de
-    herramientas por tipo, mis respuestas) se estima por chars del contenido
+    transcript, pero la API ya lo cacheo ahi. El resto (el prompt del usuario,
+    resultados de herramientas por tipo, las respuestas del modelo) se estima por chars del contenido
     POSTERIOR y se calibra para que setup + resto == prefijo real de la ultima
     inferencia. Total real (API); reparto interno estimado del contenido.
     """
@@ -365,7 +368,7 @@ def imprimir_setup(setup):
     print(f"            {'-' * 51}")
     fila(14, "TOTAL setup fijo (100%)", total, False)
     fila(14, "de eso, editable (con palanca *)", editable_tot, False)
-    print("            (*) palanca = tok/turno editables que ahorras al recortar: ***>=1000 **>=300 *<300; sin marca = base no editable")
+    print("            (*) palanca = tok/turno editables que se ahorran al recortar: ***>=1000 **>=300 *<300; sin marca = base no editable")
 
 
 def imprimir_composicion(comp, setup, acum_read):
@@ -383,14 +386,14 @@ def imprimir_composicion(comp, setup, acum_read):
     linea("setup fijo (system+tool-defs+CLAUDE.md+skills)", comp["setup"], 8)
     imprimir_setup(setup)
     if comp["prompts"]:
-        linea("tus prompts", comp["prompts"], 8)
+        linea("prompt (input)", comp["prompts"], 8)
     tools_tot = sum(comp["tools"].values())
     if tools_tot:
         linea("tool results (lecturas/comandos inline)", tools_tot, 8)
         for name, tk in sorted(comp["tools"].items(), key=lambda kv: -kv[1]):
             linea(name, tk, 12)
     if comp["output"]:
-        linea("mis respuestas (thinking+texto+tool calls)", comp["output"], 8)
+        linea("prompt (output) (thinking+texto+tool calls)", comp["output"], 8)
 
 
 # ============================================================================
@@ -458,11 +461,11 @@ _DESC_KPI = [
 _DESC_COMP = {
     "setup fijo": "System prompt + definiciones de tools + CLAUDE.md + skills + hooks "
                   "que Claude Code auto-carga al arrancar. Piso fijo que se re-lee entero cada turno.",
-    "tus prompts": "El texto que vos escribis. Casi siempre la porcion mas chica del prefijo.",
+    "prompt (input)": "El texto que escribe el usuario. Casi siempre la porcion mas chica del prefijo.",
     "tool results (total)": "Salida de las herramientas (archivos leidos, comandos, edits, "
                              "busquedas), acumulada en el hilo y re-leida cada turno.",
-    "mis respuestas": "Mi thinking + texto + tool calls. Todo lo que genero pasa a ser "
-                       "parte del prefijo re-leido en los turnos siguientes.",
+    "prompt (output)": "El thinking + texto + tool calls que genera el modelo. Todo eso pasa a ser "
+                        "parte del prefijo re-leido en los turnos siguientes.",
 }
 
 _DESC_COMP_HIJOS = {
@@ -503,18 +506,25 @@ def _items_composicion(comp, acum_read):
         })
 
     add("setup fijo", comp["setup"], "neutral")
-    add("tus prompts", comp["prompts"], "primary")
+    add("prompt (input)", comp["prompts"], "primary")
     tools_tot = sum(comp["tools"].values())
     add("tool results (total)", tools_tot, "mid")
     for name, v in sorted(comp["tools"].items(), key=lambda kv: -kv[1]):
         add(f"  · {name}", v, "mid")
-    add("mis respuestas", comp["output"], "bad")
+    add("prompt (output)", comp["output"], "bad")
     return items
+
+
+def _hora_utc(ts):
+    # ts en ISO 8601 UTC (con Z): "2026-07-18T17:33:46.748Z" -> "17:33:46 UTC".
+    if isinstance(ts, str) and len(ts) >= 19 and ts[10:11] == "T":
+        return ts[11:19] + " UTC"
+    return ""
 
 
 def _items_write(filas):
     return [{
-        "turno": i + 1, "value": f["write"],
+        "turno": i + 1, "value": f["write"], "hora": _hora_utc(f.get("ts")),
         "desc": f"Turno {i + 1}: tokens nuevos escritos al cache ese turno.",
     } for i, f in enumerate(filas)]
 
@@ -629,6 +639,7 @@ header{border:1px solid var(--line);background:linear-gradient(135deg,var(--surf
 .btn{cursor:pointer;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);
   border-radius:999px;padding:8px 16px;font:600 13px var(--font-sans);}
 .btn:hover{background:var(--surface-1);}
+.brand{display:flex;align-items:center;gap:14px;}
 .metric-boxes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:22px;}
 @media (max-width:640px){.metric-boxes{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media (max-width:400px){.metric-boxes{grid-template-columns:1fr;}}
@@ -666,7 +677,10 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 <main>
 <header>
   <div class="header-top">
-    <h1>claudit</h1>
+    <div class="brand">
+      <svg width="44" height="44" viewBox="0 0 512 512" aria-hidden="true"><rect x="60" y="300" width="82" height="150" rx="20" fill="#1fd5f9" opacity=".42"/><rect x="176" y="222" width="82" height="228" rx="20" fill="#1fd5f9" opacity=".62"/><rect x="292" y="140" width="82" height="310" rx="20" fill="#1fd5f9" opacity=".82"/><rect x="408" y="60" width="82" height="390" rx="20" fill="#1fd5f9"/></svg>
+      <h1>claudit</h1>
+    </div>
     <span class="status">__CLAUDIT_BADGE__</span>
   </div>
   <p class="muted">__CLAUDIT_SUBTITULO__</p>
@@ -678,7 +692,7 @@ __CLAUDIT_KPIS__
 <section class="card">
   <div class="chart-head">
     <h2>Cache-read — composicion del prefijo</h2>
-    <div class="chart-pct"><strong>__CLAUDIT_READ_PCT__%</strong><span>del total de tokens · lo que reenvias cada turno</span></div>
+    <div class="chart-pct"><strong>__CLAUDIT_READ_PCT__%</strong><span>del total de tokens · lo que se reenvia cada turno</span></div>
   </div>
   <p class="muted">Cada barra es un componente del prefijo que se re-lee ENTERO en cada turno. % = componente / prefijo; tok = ese % aplicado al cache-read acumulado REAL de la sesion.</p>
   <div class="chart-wrap">
@@ -692,7 +706,7 @@ __CLAUDIT_KPIS__
     <h2>Cache-write — por inferencia</h2>
     <div class="chart-pct"><strong>__CLAUDIT_WRITE_PCT__%</strong><span>del total de tokens</span></div>
   </div>
-  <p class="muted">Una barra por turno. Altura = tokens nuevos escritos al cache ese turno (el contenido que entro y se cacheo). El pico grande esta al arranque (se cachea el setup); despues se escribe algo cada turno segun cuanto contenido nuevo entro. Vas a ver picos EXTRA cuando el cache se re-crea: tras un /compact, tras un hueco de inactividad &gt;5 min (el cache expira, TTL) o al entrar contenido nuevo grande.</p>
+  <p class="muted">Una barra por turno. Altura = tokens nuevos escritos al cache ese turno (el contenido que entro y se cacheo). El pico grande esta al arranque (se cachea el setup); despues se escribe algo cada turno segun cuanto contenido nuevo entro. Aparecen picos EXTRA cuando el cache se re-crea: tras un /compact, tras un hueco de inactividad &gt;5 min (el cache expira, TTL) o al entrar contenido nuevo grande.</p>
   <div class="chart-wrap">
     <canvas id="claudit-chart-write" height="220" role="img" aria-label="__CLAUDIT_ARIA_WRITE__"></canvas>
   </div>
@@ -701,7 +715,7 @@ __CLAUDIT_KPIS__
 
 <section class="card">
   <h2>Prioridad de mejora</h2>
-  <p class="tips-intro">claudit muestra las mayores palancas por ahorro potencial por turno. Recortar, reordenar o no tocar nada es tu decisión — esto es visibilidad, no una receta.</p>
+  <p class="tips-intro">claudit muestra las mayores palancas por ahorro potencial por turno. Recortar, reordenar o no tocar nada es una decisión a criterio del usuario — esto es visibilidad, no una receta.</p>
   <ul class="tips-list">
 __CLAUDIT_TIPS__
   </ul>
@@ -802,7 +816,7 @@ function claudinDrawBarsV(canvasId, dataId){
   items.forEach(function(it,k){
     var h=plotH*(it.value/max), x=k*slot+2;
     c.fillStyle=claudinTok('primary'); c.fillRect(x,padTop+plotH-h,bw,Math.max(1,h));
-    cols.push({x0:k*slot, x1:(k+1)*slot, turno:it.turno, desc:it.desc||''});
+    cols.push({x0:k*slot, x1:(k+1)*slot, turno:it.turno, hora:it.hora||'', desc:it.desc||''});
   });
   c.strokeStyle=claudinTok('line'); c.beginPath(); c.moveTo(0,padTop+plotH+0.5); c.lineTo(W,padTop+plotH+0.5); c.stroke();
   c.fillStyle=claudinTok('muted'); c.font='11px '+claudinTok('font-sans'); c.textBaseline='top';
@@ -820,7 +834,7 @@ function claudinDrawBarsV(canvasId, dataId){
     el.addEventListener('mousemove', function(e){
       var cs=el._cols||[], x=e.offsetX, hit=null;
       for(var i=0;i<cs.length;i++){ if(x>=cs[i].x0 && x<cs[i].x1){ hit=cs[i]; break; } }
-      if(hit && hit.desc){ claudinShowTip(e.clientX, e.clientY, 'Turno '+hit.turno, hit.desc); } else { claudinHideTip(); }
+      if(hit && hit.desc){ claudinShowTip(e.clientX, e.clientY, 'Turno '+hit.turno+(hit.hora?' · '+hit.hora:''), hit.desc); } else { claudinHideTip(); }
     });
     el.addEventListener('mouseleave', function(){ claudinHideTip(); });
   }
@@ -923,8 +937,8 @@ def _chequear_update():
 
     return (
         "+-----------------------------------------------------------------+\n"
-        f"|  !! HAY UNA NUEVA VERSION DE CLAUDIT: {remota} (tenes {instalada})\n"
-        "|  Antes de confiar en estos numeros, actualiza y reinicia:\n"
+        f"|  !! HAY UNA NUEVA VERSION DE CLAUDIT: {remota} (instalada: {instalada})\n"
+        "|  Antes de confiar en estos numeros, actualizar y reiniciar:\n"
         "|    claude plugin marketplace update claudit\n"
         "|    claude plugin update claudit@claudit\n"
         "|  (para desactivar este chequeo: CLAUDIT_NO_UPDATE_CHECK=1)\n"
@@ -1006,7 +1020,7 @@ def main():
     print(f"  TOTAL estimado                        ~ {usd(total_usd)}")
     print("=" * ancho)
     print("Lente: cada inferencia re-lee el prefijo ENTERO como cache-read.")
-    print("Cuanto mas escribis en el hilo (archivos inline, prompts largos, sin")
+    print("Cuanto mas se escribe en el hilo (archivos inline, prompts largos, sin")
     print("skills/distill/sub-agentes), mas grande el prefijo -> mas cache-read en")
     print("CADA turno siguiente. El cache-read acumulado es el proxy del gasto.")
 

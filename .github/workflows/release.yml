@@ -1,0 +1,37 @@
+name: release
+
+# Cuando un PR con bump de version se mergea a main (cambia plugin.json), crea el tag
+# vX.Y.Z y el GitHub Release con las notas del CHANGELOG. Solo crea tag + release: NO
+# commitea a main, asi es compatible con la proteccion de rama (required-PR). Idempotente:
+# si el tag ya existe, no hace nada.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "plugin/claude-code/.claude-plugin/plugin.json"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Crear tag + release si la version es nueva
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(python3 -c "import json; print(json.load(open('plugin/claude-code/.claude-plugin/plugin.json'))['version'])")
+          TAG="v$VER"
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG ya existe, nada que hacer."; exit 0
+          fi
+          NOTES=$(awk "/^## \[$VER\]/{f=1;next} /^## \[/{f=0} f" CHANGELOG.md)
+          [ -z "$NOTES" ] && NOTES="Release claudit $VER."
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" --title "claudit $VER" --notes "$NOTES"

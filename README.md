@@ -160,23 +160,32 @@ python3 plugin/claude-code/claudit.py <uuid|archivo.jsonl>   # una sesión puntu
 
 ## Desarrollo
 
+`main` está protegido: **todo cambio entra por Pull Request**, nadie pushea directo
+(ni el mantenedor). El versionado es parte del PR, no de un bot.
+
 La versión del plugin vive en dos manifests que deben coincidir:
 `plugin/claude-code/.claude-plugin/plugin.json` y el entry del plugin en
 `.claude-plugin/marketplace.json`. [scripts/bump_version.py](scripts/bump_version.py)
 es la fuente única del bump y sube **ambos manifests en sync**.
 
-**Automático, vía CI (ante cada PR).** Cuando un PR se mergea a `main` y tocó
-`plugin/claude-code/`, el workflow
-[.github/workflows/version-bump.yml](.github/workflows/version-bump.yml) sube el patch
-en los dos manifests y lo commitea de vuelta a `main` — así `claude plugin update`
-siempre ve la versión nueva. **No requiere setup de los contribuidores.** (Si protegés
-`main` con required-PR, dale al bot permiso de push o usá un PAT.)
+**Flujo de un cambio que toca el plugin:**
 
-**Bump manual** de `minor` / `major` cuando corresponda:
+1. Rama desde `main`, hacé tu cambio.
+2. Subí la versión en el mismo PR:
+   ```bash
+   python3 scripts/bump_version.py patch   # o: minor / major
+   ```
+3. Sumá una entrada en [CHANGELOG.md](CHANGELOG.md) bajo la nueva versión.
+4. Abrí el PR. El workflow
+   [version-check](.github/workflows/version-check.yml) **valida** (no pushea nada) que
+   la versión haya subido respecto de `main` y que los dos manifests coincidan; si no,
+   falla y te dice qué correr.
+5. Al mergear, [release](.github/workflows/release.yml) crea **solo** el tag `vX.Y.Z` y
+   el GitHub Release con las notas del CHANGELOG — sin commitear a `main`, así convive
+   con la protección de rama.
 
-```bash
-python3 scripts/bump_version.py minor   # o: major
-```
+Ningún bot commitea a `main`: el gate valida, y el release solo crea tags. Por eso
+`main` puede exigir PR sin excepciones.
 
 ## Licencia
 

@@ -22,7 +22,14 @@ consume tu contexto** — para que VOS veas si hay margen para mejorar.
 Cada inferencia de Claude Code re-lee el prefijo **entero** de tu contexto como
 `cache-read`. Ese re-leído es el que **domina el gasto** de una sesión larga: no es
 tu último prompt, es todo lo que se arrastra turno a turno (system, tool-defs,
-CLAUDE.md, skills, hooks, tus prompts, resultados de herramientas y mis respuestas).
+CLAUDE.md, skills, hooks, tus prompts, resultados de herramientas y las respuestas 
+del modelo).
+
+**¿Y por qué se re-lee todo?** Porque el modelo es **stateless** —sin memoria—: no
+recuerda nada entre turnos, arranca *de cero* en cada mensaje. Para "seguir el hilo", se
+le re-manda la conversación **entera** en cada inferencia → eso es el cache-read. Es
+**inevitable** (así funciona el modelo); lo que sí crece —y que claudit te deja ver— es
+**cuánto**, porque el contexto solo se suma, nunca se achica solo.
 
 `claudit` abre esa caja negra:
 
@@ -45,9 +52,9 @@ Además del reporte de terminal, `claudit --html` genera un reporte HTML self-co
 (dark, cero dependencias, se auto-ignora en `.claudit/`) con el desglose graficado.
 Cada gráfico lleva su **% del total de tokens** — la métrica que resume todo.
 
-**Cache-read — la composición del prefijo.** El ~94% de tus tokens es esto: *lo que
-reenviás en cada turno*. Y fijate que **tus prompts son 0%** — lo caro es todo lo demás
-que se acumula (tool results, setup, respuestas).
+**Cache-read — la composición del prefijo.** El ~94% de los tokens es esto: *lo que se
+reenvía en cada turno*. Y si nos fijamos **nuestros prompts son 0%** — entonces, lo caro 
+es todo lo demás que se acumula (tool results, setup, respuestas).
 
 ![Composición del cache-read por componente](assets/funnel-cache-read.png)
 
@@ -82,6 +89,18 @@ repos — tipeás `/` y aparece en el autocomplete:
 > registran al **arrancar** la sesión. Recargá: en VSCode `Cmd+Shift+P → Reload
 > Window`; en la CLI, salí y reabrí `claude`. Después, tipeando `/` en el input
 > tenés que ver `claudit`.
+
+### Actualizar
+
+`claude plugin update` lee el **cache local** del marketplace — hay que refrescarlo
+primero, si no no ve la versión nueva y falla con *"Plugin not found"*:
+
+```bash
+claude plugin marketplace update claudit   # 1) refresca el marketplace (git pull)
+claude plugin update claudit@claudit       # 2) 0.1.0 → última
+```
+
+Reiniciá Claude Code (Reload Window / reabrir `claude`) para aplicar.
 
 ## Uso
 

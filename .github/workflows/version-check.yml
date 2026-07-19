@@ -1,0 +1,25 @@
+name: version-check
+
+# Gate de PR: cuando un PR toca el plugin, exige que la version haya subido y que los
+# dos manifests coincidan. NO pushea nada a main (a diferencia del viejo version-bump):
+# el bump lo hace el autor del PR con scripts/bump_version.py. Asi main queda blindado
+# (required-PR) sin que ningun bot necesite pushear.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "plugin/claude-code/**"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Traer la rama base
+        run: git fetch --depth=1 origin "${{ github.base_ref }}"
+
+      - name: Version subio + manifests en sync
+        run: python3 scripts/check_version.py "origin/${{ github.base_ref }}"

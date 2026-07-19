@@ -1,7 +1,7 @@
 {
-  "description": "claudit — genera el reporte HTML (.claudit/report.html) automaticamente al cerrar la sesion",
+  "description": "claudit — genera el reporte HTML en .claudit/ automaticamente al cerrar la sesion (una sola vez por sesion)",
   "hooks": {
-    "Stop": [
+    "SessionEnd": [
       {
         "hooks": [
           {

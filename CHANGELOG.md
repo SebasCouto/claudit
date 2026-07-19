@@ -8,6 +8,15 @@ del plugin vive en `plugin/claude-code/.claude-plugin/plugin.json` y se espeja e
 `.claude-plugin/marketplace.json`; un GitHub Action la incrementa automáticamente
 (ver **Versionado** en el README).
 
+## [1.0.1] - 2026-07-19
+
+### Fixed
+
+- El hook que auto-genera el reporte HTML pasa del evento `Stop` (dispara al final de
+  **cada turno**, dejando un HTML por respuesta y re-parseando el transcript entero
+  cada vez) a `SessionEnd` (**una sola vez, al cerrar la sesión**). Evita la
+  duplicación de reportes y el trabajo redundante turno a turno.
+
 ## [1.0.0] - 2026-07-18
 
 Primera versión pública de **claudit** — un plugin de Claude Code que mide el

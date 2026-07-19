@@ -67,19 +67,38 @@ por expiración del TTL, o al entrar contenido nuevo grande).
 
 ## Instalación
 
-**Dentro de Claude Code** (en el input de Claude Code, no en la terminal):
+Hay tres formas. La **A (Manage Plugins)** es la más a prueba de errores —sobre todo
+en Windows/VS Code.
+
+### A) Manage Plugins (interfaz gráfica) — recomendada
+
+1. Abrí **Manage Plugins** en Claude Code.
+2. En la pestaña de **marketplaces**, agregá el repo: `SebasCouto/claudit`.
+3. Pasá a la sub-pestaña **Plugins**, seleccioná el marketplace `claudit` e instalá
+   el plugin **claudit**.
+
+### B) Dentro de Claude Code (comandos de sesión)
+
+Escribí esto **en el input de chat de Claude Code** (NO en la terminal):
 
 ```
 /plugin marketplace add SebasCouto/claudit
 /plugin install claudit@claudit
 ```
 
-**O desde la terminal**, con el binario `claude`:
+### C) Desde la terminal, con el binario `claude`
 
 ```bash
 claude plugin marketplace add SebasCouto/claudit
 claude plugin install claudit@claudit
 ```
+
+> [!WARNING]
+> **`/plugin …` es un comando INTERNO de Claude Code, no de tu shell.** Si lo pegás en
+> PowerShell, bash o la terminal de VS Code, vas a ver `El término '/plugin' no se
+> reconoce…` (o `command not found`). En la terminal usá la opción **C**
+> (`claude plugin …`); los `/plugin …` van solo en el chat (opción **B**), o directamente
+> usá la GUI (opción **A**).
 
 Una vez instalado, el comando `/claudit:claudit` queda disponible en **todos** los
 repos — al tipear `/` aparece en el autocomplete:

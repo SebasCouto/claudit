@@ -44,6 +44,7 @@ import re
 import sys
 import time
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 # USD por millon de tokens (Opus 4.8; edita si cambia el pricing).
@@ -515,16 +516,28 @@ def _items_composicion(comp, acum_read):
     return items
 
 
-def _hora_utc(ts):
-    # ts en ISO 8601 UTC (con Z): "2026-07-18T17:33:46.748Z" -> "17:33:46 UTC".
-    if isinstance(ts, str) and len(ts) >= 19 and ts[10:11] == "T":
+def _hora_local(ts):
+    # ts en ISO 8601 UTC (con Z): "2026-07-18T17:33:46.748Z". Se convierte a la hora
+    # LOCAL de la maquina que genera el reporte, con el offset explicito. En una PC
+    # en Buenos Aires da "14:33:46 (UTC-3)"; en otro huso, el suyo. Sin hardcodear ciudad.
+    if not (isinstance(ts, str) and len(ts) >= 19 and ts[10:11] == "T"):
+        return ""
+    try:
+        dt = datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+        loc = dt.astimezone()  # huso local de la maquina
+        off = loc.utcoffset()
+        total = int(off.total_seconds() // 60) if off else 0
+        signo = "+" if total >= 0 else "-"
+        hh, mm = divmod(abs(total), 60)
+        etiqueta = f"UTC{signo}{hh}" + (f":{mm:02d}" if mm else "")
+        return loc.strftime("%H:%M:%S") + f" ({etiqueta})"
+    except ValueError:
         return ts[11:19] + " UTC"
-    return ""
 
 
 def _items_write(filas):
     return [{
-        "turno": i + 1, "value": f["write"], "hora": _hora_utc(f.get("ts")),
+        "turno": i + 1, "value": f["write"], "hora": _hora_local(f.get("ts")),
         "desc": f"Turno {i + 1}: tokens nuevos escritos al cache ese turno.",
     } for i, f in enumerate(filas)]
 

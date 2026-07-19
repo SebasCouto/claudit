@@ -11,10 +11,14 @@ de código, sin resumirla, reordenarla ni reinterpretarla. Es un reporte de núm
 reales: cualquier edición lo falsea.
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/claudit.py" $ARGUMENTS
+python3 "${CLAUDE_PLUGIN_ROOT}/claudit.py" --html $ARGUMENTS
 ```
 
 Notas:
+- **Siempre** se genera el reporte **HTML** (`.claudit/report.html`) además del de texto.
+  Mostrá el texto verbatim y decime la ruta del HTML (la línea `Reporte HTML: ...`).
+- Si el script imprime un aviso de **nueva versión** al inicio, mostralo **destacado
+  ANTES** del reporte (el usuario debe actualizar antes de confiar en los números).
 - `$ARGUMENTS` reenvía lo que el usuario haya pasado: `--detalle` (una fila por
   inferencia) y/o un `<archivo.jsonl | uuid>` para auditar una sesión puntual.
 - El script resuelve solo qué proyecto medir: usa `$CLAUDE_PROJECT_DIR` o, si no

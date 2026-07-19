@@ -41,6 +41,8 @@ import json
 import os
 import re
 import sys
+import time
+import urllib.request
 from pathlib import Path
 
 # USD por millon de tokens (Opus 4.8; edita si cambia el pricing).
@@ -627,12 +629,12 @@ header{border:1px solid var(--line);background:linear-gradient(135deg,var(--surf
 .btn{cursor:pointer;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);
   border-radius:999px;padding:8px 16px;font:600 13px var(--font-sans);}
 .btn:hover{background:var(--surface-1);}
-.metric-boxes{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-top:22px;}
-@media (max-width:920px){.metric-boxes{grid-template-columns:repeat(3,1fr);}}
-@media (max-width:520px){.metric-boxes{grid-template-columns:repeat(2,1fr);}}
-.metric{border:1px solid var(--line);background:var(--surface-2);border-radius:16px;padding:16px;
-  display:flex;flex-direction:column;align-items:center;text-align:center;gap:4px;}
-.metric strong{font-size:38px;line-height:1.05;}
+.metric-boxes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:22px;}
+@media (max-width:640px){.metric-boxes{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media (max-width:400px){.metric-boxes{grid-template-columns:1fr;}}
+.metric{border:1px solid var(--line);background:var(--surface-2);border-radius:16px;padding:18px 16px;min-width:0;
+  display:flex;flex-direction:column;align-items:center;text-align:center;gap:5px;}
+.metric strong{font-size:clamp(22px,3vw,34px);line-height:1.1;white-space:nowrap;max-width:100%;}
 .metric>span{color:var(--muted);font-size:13px;}
 .card{border:1px solid var(--line);background:var(--surface-1);border-radius:var(--radius);padding:24px 28px;margin-top:20px;}
 .chart-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;}
@@ -761,7 +763,9 @@ function claudinDrawBarsH(canvasId, dataId){
   items.forEach(function(it,k){
     var y=8+k*rowH;
     c.fillStyle=claudinTok('ink'); c.font='13px '+claudinTok('font-sans'); c.textAlign='left'; c.textBaseline='middle';
-    c.fillText(it.label,0,y+bh/2);
+    var lab=it.label;                                  // la barra arranca en x=120: truncar el label si no entra
+    if(c.measureText(lab).width>108){ while(lab.length>1 && c.measureText(lab+'…').width>108){lab=lab.slice(0,-1);} lab+='…'; }
+    c.fillText(lab,0,y+bh/2);
     var w=Math.max(2,(W-300)*(it.value/max));
     c.fillStyle=claudinTok(it.color||'primary'); c.fillRect(120,y,w,bh);
     var lbl=Math.round(it.pct*100)+'%  '+it.tokLabel+' tok';
@@ -801,13 +805,15 @@ function claudinDrawBarsV(canvasId, dataId){
     cols.push({x0:k*slot, x1:(k+1)*slot, turno:it.turno, desc:it.desc||''});
   });
   c.strokeStyle=claudinTok('line'); c.beginPath(); c.moveTo(0,padTop+plotH+0.5); c.lineTo(W,padTop+plotH+0.5); c.stroke();
-  c.fillStyle=claudinTok('muted'); c.font='11px '+claudinTok('font-sans'); c.textAlign='center'; c.textBaseline='top';
-  var step=Math.max(1,Math.round(items.length/10));
-  items.forEach(function(it,k){
-    if(k%step===0 || k===items.length-1){
-      c.fillText(String(it.turno), k*slot+2+bw/2, padTop+plotH+6);
-    }
-  });
+  c.fillStyle=claudinTok('muted'); c.font='11px '+claudinTok('font-sans'); c.textBaseline='top';
+  var step=Math.max(1,Math.round(items.length/10)), n=items.length;
+  for(var k=0;k<n;k++){
+    var isFirst=(k===0), isLast=(k===n-1);
+    if(!(isFirst||isLast||(k%step===0 && (n-1-k)>=step*0.55))) continue;
+    var lx=k*slot+2+bw/2;                              // primero a la izq, ultimo a la der (no se sale del canvas)
+    if(isFirst){ c.textAlign='left'; lx=0; } else if(isLast){ c.textAlign='right'; lx=W; } else { c.textAlign='center'; }
+    c.fillText(String(items[k].turno), lx, padTop+plotH+6);
+  }
   el._cols=cols;
   if(!el._tipWired){
     el._tipWired=true;
@@ -833,6 +839,99 @@ claudinWireMetrics();
 """
 
 
+# ============================================================================
+# Chequeo de nueva version: el slash command siempre pasa --html, asi que este
+# chequeo corre en CADA invocacion. Debe ser silencioso ante cualquier fallo
+# (offline, repo privado -> 404, timeout) y pegarle a la red como maximo 1 vez
+# por dia (cache local) para no demorar el reporte.
+# ============================================================================
+_UPDATE_CACHE = HOME / ".claude" / "plugins" / ".claudit-update-check.json"
+_UPDATE_URL = "https://raw.githubusercontent.com/SebasCouto/claudit/main/.claude-plugin/marketplace.json"
+_UPDATE_TTL_SEG = 24 * 60 * 60
+
+
+def _version_instalada():
+    """Version del plugin instalado, leida de .claude-plugin/plugin.json junto al script.
+
+    None si el archivo no existe o el JSON es invalido/incompleto.
+    """
+    try:
+        p = Path(__file__).resolve().parent / ".claude-plugin" / "plugin.json"
+        return json.loads(p.read_text("utf-8")).get("version")
+    except Exception:
+        return None
+
+
+def _chequear_update():
+    """Si hay una version de claudit mas nueva publicada, devuelve el banner de alerta (o None).
+
+    Opt-out con CLAUDIT_NO_UPDATE_CHECK (cualquier valor) -> None sin tocar la red.
+    Cache diario en ~/.claude/plugins/.claudit-update-check.json: si tiene menos de
+    24h, reusa la version remota cacheada (no vuelve a pegarle a la red). Si no,
+    hace fetch a marketplace.json (timeout 3s) y reescribe el cache. Cualquier error
+    (offline, repo privado -> 404, timeout, JSON invalido) -> None en silencio;
+    nunca rompe ni demora el reporte.
+    """
+    if os.environ.get("CLAUDIT_NO_UPDATE_CHECK"):
+        return None
+    instalada = _version_instalada()
+    if not instalada:
+        return None
+
+    remota = None
+    try:
+        if _UPDATE_CACHE.is_file():
+            cache = json.loads(_UPDATE_CACHE.read_text("utf-8"))
+            if time.time() - cache.get("ts", 0) < _UPDATE_TTL_SEG:
+                remota = cache.get("remote")
+    except Exception:
+        remota = None
+
+    if remota is None:
+        # El cache no tenia una entrada reciente -> intentamos el fetch una vez.
+        # Escribimos el cache pase lo que pase (exito o fallo, p.ej. 404 de repo
+        # privado) para que el chequeo no le pegue a la red mas de 1 vez/dia ni
+        # siquiera cuando esta fallando de forma persistente.
+        try:
+            with urllib.request.urlopen(_UPDATE_URL, timeout=3) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            plugins = data.get("plugins") or []
+            claudit_plugin = next(
+                (p for p in plugins if isinstance(p, dict) and p.get("name") == "claudit"),
+                plugins[0] if plugins and isinstance(plugins[0], dict) else {},
+            )
+            remota = claudit_plugin.get("version")
+        except Exception:
+            remota = None
+        try:
+            _UPDATE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            _UPDATE_CACHE.write_text(
+                json.dumps({"ts": time.time(), "remote": remota}), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+    if not remota:
+        return None
+    try:
+        es_mas_nueva = (tuple(int(x) for x in remota.split("."))
+                        > tuple(int(x) for x in instalada.split(".")))
+    except Exception:
+        return None
+    if not es_mas_nueva:
+        return None
+
+    return (
+        "+-----------------------------------------------------------------+\n"
+        f"|  !! HAY UNA NUEVA VERSION DE CLAUDIT: {remota} (tenes {instalada})\n"
+        "|  Antes de confiar en estos numeros, actualiza y reinicia:\n"
+        "|    claude plugin marketplace update claudit\n"
+        "|    claude plugin update claudit@claudit\n"
+        "|  (para desactivar este chequeo: CLAUDIT_NO_UPDATE_CHECK=1)\n"
+        "+-----------------------------------------------------------------+"
+    )
+
+
 def parsear_args(args):
     """Separa --detalle, --html [ruta] y el argumento posicional (archivo/uuid).
 
@@ -840,6 +939,10 @@ def parsear_args(args):
     SOLO si termina en '.html' (si no, es ambiguo con el posicional del
     transcript — p.ej. `--html sesion.jsonl` no debe robarse el .jsonl como
     ruta). Sin ruta reconocible, --html usa el default (REPO/.claudit/report.html).
+    --html repetido (el slash command siempre lo pasa, y el usuario puede pasarlo
+    tambien) es tolerado: quiere_html es idempotente y un "--html" nunca matchea
+    el sufijo '.html' (termina en 'tml' sin punto), asi que un --html duplicado
+    jamas se come el token siguiente como ruta por error.
     """
     detalle = False
     quiere_html = False
@@ -862,6 +965,10 @@ def parsear_args(args):
 
 
 def main():
+    alerta_update = _chequear_update()
+    if alerta_update:
+        print(alerta_update)
+
     detalle, quiere_html, html_ruta_arg, posicionales = parsear_args(sys.argv[1:])
     jsonl = resolver_jsonl(posicionales[0] if posicionales else None)
     lineas = parsear_lineas(jsonl)

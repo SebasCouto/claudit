@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# claudit report output (el dir se auto-ignora con su propio .gitignore; esto es doble seguro)
+.claudit/

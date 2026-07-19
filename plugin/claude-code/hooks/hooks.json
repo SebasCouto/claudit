@@ -1,0 +1,17 @@
+{
+  "description": "claudit — genera el reporte HTML (.claudit/report.html) automaticamente al cerrar la sesion",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/claudit.py\" --html",
+            "timeout": 20,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -41,6 +41,7 @@ import html
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import urllib.request
@@ -876,6 +877,12 @@ _UPDATE_CACHE = HOME / ".claude" / "plugins" / ".claudit-update-check.json"
 _UPDATE_URL = "https://raw.githubusercontent.com/SebasCouto/claudit/main/.claude-plugin/marketplace.json"
 _UPDATE_TTL_SEG = 24 * 60 * 60
 
+# Cache de versiones que Claude Code deja en disco al instalar/actualizar el plugin
+# (una carpeta por version: .../cache/claudit/claudit/<version>/). Fuente de verdad de
+# que version esta instalada: installed_plugins.json.
+_CACHE_VERSIONS_DIR = HOME / ".claude" / "plugins" / "cache" / "claudit" / "claudit"
+_INSTALLED_PLUGINS = HOME / ".claude" / "plugins" / "installed_plugins.json"
+
 
 def _version_instalada():
     """Version del plugin instalado, leida de .claude-plugin/plugin.json junto al script.
@@ -887,6 +894,49 @@ def _version_instalada():
         return json.loads(p.read_text("utf-8")).get("version")
     except Exception:
         return None
+
+
+def _versiones_a_preservar():
+    """Versiones de claudit que NO hay que borrar del cache: la que corre esta sesion
+    viva (el script en ejecucion) y la instalada segun installed_plugins.json (todos
+    los scopes). Borrar la que corre rompe la sesion viva, y en Windows tira
+    PermissionError (no se puede borrar un archivo en uso)."""
+    preservar = set()
+    corriendo = _version_instalada()
+    if corriendo:
+        preservar.add(corriendo)
+    try:
+        data = json.loads(_INSTALLED_PLUGINS.read_text("utf-8"))
+        for entry in data.get("plugins", {}).get("claudit@claudit", []):
+            ver = entry.get("version")
+            if ver:
+                preservar.add(ver)
+    except Exception:
+        pass
+    return preservar
+
+
+def _limpiar_versiones_huerfanas():
+    """Borra del cache las carpetas de versiones huerfanas de claudit, preservando la
+    instalada y la que corre esta sesion. Cross-OS por construccion (shutil.rmtree +
+    pathlib andan igual en Windows/macOS/Linux — no hace falta detectar el OS ni
+    shellear un `rm`). Silencioso ante cualquier fallo: nunca rompe ni demora el
+    reporte. Claude Code las limpia solo a los 7 dias; esto lo hace ya, en cada
+    corrida, asi no se acumulan versiones viejas apenas reiniciaste a la nueva.
+
+    Si no hay nada confirmado que preservar (no se pudo leer la version instalada ni
+    la que corre) NO borra nada, para no barrer de mas por un estado ambiguo."""
+    try:
+        if not _CACHE_VERSIONS_DIR.is_dir():
+            return  # no hay cache instalado (dev, otro layout, OS no reconocido) -> skip
+        preservar = _versiones_a_preservar()
+        if not preservar:
+            return
+        for hijo in _CACHE_VERSIONS_DIR.iterdir():
+            if hijo.is_dir() and hijo.name not in preservar:
+                shutil.rmtree(hijo, ignore_errors=True)
+    except Exception:
+        pass
 
 
 def _chequear_update():
@@ -992,6 +1042,7 @@ def parsear_args(args):
 
 
 def main():
+    _limpiar_versiones_huerfanas()
     alerta_update = _chequear_update()
     if alerta_update:
         print(alerta_update)

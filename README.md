@@ -120,7 +120,19 @@ claude plugin marketplace update claudit   # 1) refresca el marketplace (git pul
 claude plugin update claudit@claudit       # 2) 0.1.0 → última
 ```
 
-Reiniciar Claude Code (Reload Window / reabrir `claude`) para aplicar.
+> **⚠️ El reinicio es OBLIGATORIO, no opcional.** Los hooks se cargan al **arrancar**
+> la sesión y **no se recargan en caliente**. Una sesión ya abierta cuando actualizaste
+> **seguirá usando los hooks viejos** hasta que recargues (VS Code: `Reload Window`;
+> CLI: salir y reabrir `claude`).
+
+**Limpieza del cache (automática).** Al instalar una versión nueva, Claude Code deja la
+anterior como **huérfana** en `~/.claude/plugins/cache/claudit/claudit/<version>/` y la
+borra sola recién **a los 7 días** (período de gracia para no romper sesiones abiertas).
+claudit no espera: **en cada corrida barre las versiones huérfanas del cache**,
+preservando la **instalada** y la que esté **corriendo** una sesión viva (borrar esa
+rompería la sesión, y en Windows falla porque el archivo está en uso). Funciona igual en
+Windows, macOS y Linux, y no toca nada si no encuentra el cache. No hay que limpiar nada
+a mano.
 
 ## Uso
 

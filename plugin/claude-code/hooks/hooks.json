@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/claudit.py\" --html",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/claudit.py\" --html --force",
             "timeout": 20,
             "async": true
           }

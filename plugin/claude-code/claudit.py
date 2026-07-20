@@ -1098,65 +1098,66 @@ def _limpiar_versiones_huerfanas():
         pass
 
 
-def _chequear_update():
-    """Si hay una version de claudit mas nueva publicada, devuelve el banner de alerta (o None).
+def _version_remota():
+    """Version publicada en marketplace.json de `main`, o None (opt-out/offline/error).
 
-    Opt-out con CLAUDIT_NO_UPDATE_CHECK (cualquier valor) -> None sin tocar la red.
-    Cache diario en ~/.claude/plugins/.claudit-update-check.json: si tiene menos de
-    24h, reusa la version remota cacheada (no vuelve a pegarle a la red). Si no,
-    hace fetch a marketplace.json (timeout 3s) y reescribe el cache. Cualquier error
-    (offline, repo privado -> 404, timeout, JSON invalido) -> None en silencio;
-    nunca rompe ni demora el reporte.
+    Opt-out con CLAUDIT_NO_UPDATE_CHECK (cualquier valor). Cache diario en
+    ~/.claude/plugins/.claudit-update-check.json: si tiene menos de 24h reusa la
+    version cacheada; si no, hace fetch (timeout 3s) y reescribe el cache pase lo
+    que pase (exito o fallo) para pegarle a la red como maximo 1 vez/dia. Cualquier
+    error (offline, 404, timeout, JSON invalido) -> None en silencio.
     """
     if os.environ.get("CLAUDIT_NO_UPDATE_CHECK"):
         return None
-    instalada = _version_instalada()
-    if not instalada:
-        return None
-
-    remota = None
     try:
         if _UPDATE_CACHE.is_file():
             cache = json.loads(_UPDATE_CACHE.read_text("utf-8"))
             if time.time() - cache.get("ts", 0) < _UPDATE_TTL_SEG:
-                remota = cache.get("remote")
+                return cache.get("remote")
+    except Exception:
+        pass
+
+    remota = None
+    try:
+        with urllib.request.urlopen(_UPDATE_URL, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        plugins = data.get("plugins") or []
+        claudit_plugin = next(
+            (p for p in plugins if isinstance(p, dict) and p.get("name") == "claudit"),
+            plugins[0] if plugins and isinstance(plugins[0], dict) else {},
+        )
+        remota = claudit_plugin.get("version")
     except Exception:
         remota = None
+    try:
+        _UPDATE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        _UPDATE_CACHE.write_text(json.dumps({"ts": time.time(), "remote": remota}), encoding="utf-8")
+    except Exception:
+        pass
+    return remota
 
-    if remota is None:
-        # El cache no tenia una entrada reciente -> intentamos el fetch una vez.
-        # Escribimos el cache pase lo que pase (exito o fallo, p.ej. 404 de repo
-        # privado) para que el chequeo no le pegue a la red mas de 1 vez/dia ni
-        # siquiera cuando esta fallando de forma persistente.
-        try:
-            with urllib.request.urlopen(_UPDATE_URL, timeout=3) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            plugins = data.get("plugins") or []
-            claudit_plugin = next(
-                (p for p in plugins if isinstance(p, dict) and p.get("name") == "claudit"),
-                plugins[0] if plugins and isinstance(plugins[0], dict) else {},
-            )
-            remota = claudit_plugin.get("version")
-        except Exception:
-            remota = None
-        try:
-            _UPDATE_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            _UPDATE_CACHE.write_text(
-                json.dumps({"ts": time.time(), "remote": remota}), encoding="utf-8"
-            )
-        except Exception:
-            pass
 
-    if not remota:
+def _hay_update():
+    """(remota, instalada) si hay una version publicada MAS NUEVA que la instalada; si no, None.
+    Silencioso ante cualquier dato faltante o version no comparable."""
+    instalada = _version_instalada()
+    remota = _version_remota()
+    if not instalada or not remota:
         return None
     try:
-        es_mas_nueva = (tuple(int(x) for x in remota.split("."))
-                        > tuple(int(x) for x in instalada.split(".")))
+        if tuple(int(x) for x in remota.split(".")) > tuple(int(x) for x in instalada.split(".")):
+            return (remota, instalada)
     except Exception:
         return None
-    if not es_mas_nueva:
-        return None
+    return None
 
+
+def _chequear_update():
+    """Banner de alerta si hay version mas nueva (o None). Informativo; no bloquea."""
+    upd = _hay_update()
+    if not upd:
+        return None
+    remota, instalada = upd
     return (
         "+-----------------------------------------------------------------+\n"
         f"|  !! HAY UNA NUEVA VERSION DE CLAUDIT: {remota} (instalada: {instalada})\n"
@@ -1183,12 +1184,18 @@ def parsear_args(args):
     detalle = False
     quiere_html = False
     html_ruta = None
+    forzar = False
     posicionales = []
     i = 0
     while i < len(args):
         a = args[i]
         if a == "--detalle":
             detalle = True
+        elif a == "--force":
+            # Saltea el gate de version: genera el reporte con la version instalada
+            # aunque haya una mas nueva. Lo usa el hook (panorama siempre) y la rama
+            # "No" del slash command.
+            forzar = True
         elif a == "--html":
             quiere_html = True
             if i + 1 < len(args) and args[i + 1].lower().endswith(".html"):
@@ -1197,16 +1204,29 @@ def parsear_args(args):
         else:
             posicionales.append(a)
         i += 1
-    return detalle, quiere_html, html_ruta, posicionales
+    return detalle, quiere_html, html_ruta, forzar, posicionales
 
 
 def main():
     _limpiar_versiones_huerfanas()
-    alerta_update = _chequear_update()
-    if alerta_update:
-        print(alerta_update)
+    detalle, quiere_html, html_ruta_arg, forzar, posicionales = parsear_args(sys.argv[1:])
 
-    detalle, quiere_html, html_ruta_arg, posicionales = parsear_args(sys.argv[1:])
+    # Gate de version: si hay una version mas nueva publicada, el reporte queda
+    # BLOQUEADO hasta actualizar. --force lo saltea (rama "No" del slash command y
+    # el hook de arranque, que pasa --force para dar el panorama siempre). El slash
+    # command detecta la marca UPDATE_REQUIRED y ofrece actualizar (Yes) o --force (No).
+    upd = None if forzar else _hay_update()
+    if upd:
+        remota, instalada = upd
+        print("UPDATE_REQUIRED")
+        print(f"claudit {instalada} instalada · {remota} disponible.")
+        print("El reporte esta BLOQUEADO hasta actualizar. Actualiza y reinicia Claude,")
+        print("o genera con la version actual pasando --force.")
+        return
+    banner = _chequear_update() if forzar else None  # con --force el aviso es informativo, no bloquea
+    if banner:
+        print(banner)
+
     jsonl = resolver_medible(posicionales[0] if posicionales else None)
     lineas = parsear_lineas(jsonl)
     filas = leer_inferencias(lineas)

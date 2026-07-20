@@ -153,6 +153,31 @@ rompería la sesión, y en Windows falla porque el archivo está en uso). Funcio
 Windows, macOS y Linux, y no toca nada si no encuentra el cache. No hay que limpiar nada
 a mano.
 
+### Aviso de versión nueva (el reporte se detiene)
+
+Cuando corrés `/claudit` con una versión vieja instalada, claudit **detiene el reporte**
+antes de generarlo: los números pueden estar calculados con lógica vieja, y confiar en
+ellos sería falsear la auditoría. En la terminal se ve así:
+
+```
+UPDATE_REQUIRED
+claudit 1.0.0 instalada · 1.0.1 disponible.
+El reporte esta BLOQUEADO hasta actualizar. Actualiza y reinicia Claude,
+o genera con la version actual pasando --force.
+```
+
+<!-- TODO(20-jul): reemplazar por la captura real en docs/assets/version-warning.png cuando esté subida -->
+
+El slash command detecta ese bloqueo y te ofrece dos caminos:
+
+- **Actualizar (Yes)** → corre `marketplace update` + `plugin update` y te pide **reiniciar**
+  (los hooks se cargan al arrancar, no en caliente — ver la nota de arriba).
+- **Generar igual (No)** → fuerza el reporte con la versión instalada (`--force`); el aviso
+  pasa a ser informativo y no bloquea.
+
+El chequeo es **local con cache diario** (no pega a la red en cada corrida). Para desactivarlo
+por completo: `CLAUDIT_NO_UPDATE_CHECK=1`.
+
 ## Uso
 
 ```

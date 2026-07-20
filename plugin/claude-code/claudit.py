@@ -13,9 +13,17 @@
 # Como CLI standalone:          python3 claudit.py [--detalle] [--html [ruta]] [<archivo.jsonl | uuid>]
 #
 # --html [ruta]  ademas del reporte de texto, escribe un reporte HTML self-contained
-#                (charts en canvas, dark/light) en `ruta`, o en REPO/.claudit/report.html
-#                si no se especifica. Crea REPO/.claudit/.gitignore con "*" para que el
-#                reporte nunca quede en el working tree del repo del usuario.
+#                (charts en canvas, dark/light) en `ruta`, o -sin ruta- en la subcarpeta
+#                de la sesion: REPO/.claudit/<slot>_<timestamp>__<id8>/report-<ts>.html
+#                (ring de 11 slots; ver carpeta_sesion). Crea REPO/.claudit/.gitignore
+#                con "*" para que nada quede en el working tree del repo del usuario.
+#
+# El hook SessionStart lo dispara al INICIAR la sesion para dar un panorama del setup
+# fijo desde el arranque. La sesion que arranca todavia no tiene inferencias, pero el
+# setup fijo es identico entre sesiones, asi que se calibra contra la ultima inferencia
+# disponible (una sesion previa cualquiera del proyecto: Claude Code escribe el .jsonl
+# de CADA sesion, haya o no plugin). Unico borde sin panorama: la 1a sesion de la vida
+# en un proyecto nuevo (cero transcripts previos) -> aparece en la 1a corrida a mano.
 #
 # Resuelve QUE proyecto medir por $CLAUDE_PROJECT_DIR (cuando corre como plugin)
 # o, si no esta seteado, por el directorio actual (cwd). Asi mide el repo activo,
@@ -61,6 +69,9 @@ CHARS_POR_TOKEN = 4
 PALANCA_ALTA = 1000
 PALANCA_MEDIA = 300
 SECC_MINIMA = 200  # secciones de CLAUDE.md por debajo de esto se colapsan en 'resto'
+RING_SLOTS = 11    # subcarpetas .claudit/0_ .. .claudit/10_; la sesion N reusa el slot N % 11
+                   # (la sesion 11 pisa la 0, la 12 pisa la 1, ...). El timestamp del nombre
+                   # manda para "cual es la ultima"; el numero es el handle visual del slot.
 
 # El repo cuya sesion medimos: $CLAUDE_PROJECT_DIR (lo inyecta Claude Code al
 # correr como plugin) o, si no esta, el directorio actual. NO la carpeta del
@@ -96,6 +107,78 @@ def resolver_jsonl(arg):
     if not sesiones:
         sys.exit(f"No hay transcripts .jsonl en {proj}")
     return sesiones[-1]
+
+
+def _tiene_inferencias(jsonl):
+    """True si el transcript tiene al menos una inferencia con usage."""
+    try:
+        return bool(leer_inferencias(parsear_lineas(jsonl)))
+    except OSError:
+        return False
+
+
+def resolver_medible(arg):
+    """jsonl a MEDIR: el arg explicito, o el mas reciente CON inferencias.
+
+    En un SessionStart la sesion que arranca todavia no tiene inferencias; el
+    setup fijo es identico entre sesiones, asi que se calibra contra la ultima
+    inferencia disponible (la sesion previa). Apenas la sesion actual produce su
+    primera inferencia, /claudit a mano ya la mide a ella.
+    """
+    if arg:
+        return resolver_jsonl(arg)
+    proj = dir_proyecto()
+    if not proj.is_dir():
+        sys.exit(f"No existe el directorio de proyecto: {proj}")
+    for s in sorted(proj.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if _tiene_inferencias(s):
+            return s
+    sys.exit("Ninguna sesion del proyecto tiene inferencias con usage todavia.")
+
+
+def sesion_actual():
+    """jsonl de la sesion en curso: la mas reciente por mtime, aunque este vacia.
+    Sirve para NOMBRAR la subcarpeta; en SessionStart es la que recien arranca."""
+    proj = dir_proyecto()
+    sesiones = sorted(proj.glob("*.jsonl"), key=lambda p: p.stat().st_mtime) if proj.is_dir() else []
+    return sesiones[-1] if sesiones else None
+
+
+def carpeta_sesion(id_sesion):
+    """Devuelve (creandola si hace falta) la subcarpeta de .claudit para la sesion.
+
+    Ring de RING_SLOTS slots (.claudit/0_ .. .claudit/10_): una sesion nueva toma
+    el slot (contador % RING_SLOTS) y PISA la carpeta que ocupara ese slot ~11
+    sesiones atras. Si la sesion ya tiene carpeta, la reusa: todos los reports de
+    esa sesion se acumulan adentro. El nombre lleva slot, timestamp local y los 8
+    primeros del session-id. Contador persistido en .claudit/.ring.
+    """
+    base = REPO / ".claudit"
+    base.mkdir(parents=True, exist_ok=True)
+    (base / ".gitignore").write_text("*\n", encoding="utf-8")
+    for suelto in base.glob("report-*.html"):  # residuos del esquema plano viejo
+        suelto.unlink()
+    id8 = id_sesion[:8]
+
+    existente = next((d for d in base.glob(f"*__{id8}") if d.is_dir()), None)
+    if existente:
+        return existente
+
+    ring = base / ".ring"
+    try:
+        ordinal = int(json.loads(ring.read_text("utf-8")).get("next", 0))
+    except (OSError, ValueError, json.JSONDecodeError):
+        ordinal = 0
+    slot = ordinal % RING_SLOTS
+    ring.write_text(json.dumps({"next": ordinal + 1}), encoding="utf-8")
+
+    for viejo in base.glob(f"{slot}_*"):  # el '_' tras el numero evita que 1_* pise 10_*
+        if viejo.is_dir():
+            shutil.rmtree(viejo, ignore_errors=True)
+
+    carpeta = base / f"{slot}_{time.strftime('%Y-%m-%d_%H-%M-%S')}__{id8}"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    return carpeta
 
 
 def usage_de(entry):
@@ -1015,65 +1098,66 @@ def _limpiar_versiones_huerfanas():
         pass
 
 
-def _chequear_update():
-    """Si hay una version de claudit mas nueva publicada, devuelve el banner de alerta (o None).
+def _version_remota():
+    """Version publicada en marketplace.json de `main`, o None (opt-out/offline/error).
 
-    Opt-out con CLAUDIT_NO_UPDATE_CHECK (cualquier valor) -> None sin tocar la red.
-    Cache diario en ~/.claude/plugins/.claudit-update-check.json: si tiene menos de
-    24h, reusa la version remota cacheada (no vuelve a pegarle a la red). Si no,
-    hace fetch a marketplace.json (timeout 3s) y reescribe el cache. Cualquier error
-    (offline, repo privado -> 404, timeout, JSON invalido) -> None en silencio;
-    nunca rompe ni demora el reporte.
+    Opt-out con CLAUDIT_NO_UPDATE_CHECK (cualquier valor). Cache diario en
+    ~/.claude/plugins/.claudit-update-check.json: si tiene menos de 24h reusa la
+    version cacheada; si no, hace fetch (timeout 3s) y reescribe el cache pase lo
+    que pase (exito o fallo) para pegarle a la red como maximo 1 vez/dia. Cualquier
+    error (offline, 404, timeout, JSON invalido) -> None en silencio.
     """
     if os.environ.get("CLAUDIT_NO_UPDATE_CHECK"):
         return None
-    instalada = _version_instalada()
-    if not instalada:
-        return None
-
-    remota = None
     try:
         if _UPDATE_CACHE.is_file():
             cache = json.loads(_UPDATE_CACHE.read_text("utf-8"))
             if time.time() - cache.get("ts", 0) < _UPDATE_TTL_SEG:
-                remota = cache.get("remote")
+                return cache.get("remote")
+    except Exception:
+        pass
+
+    remota = None
+    try:
+        with urllib.request.urlopen(_UPDATE_URL, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        plugins = data.get("plugins") or []
+        claudit_plugin = next(
+            (p for p in plugins if isinstance(p, dict) and p.get("name") == "claudit"),
+            plugins[0] if plugins and isinstance(plugins[0], dict) else {},
+        )
+        remota = claudit_plugin.get("version")
     except Exception:
         remota = None
+    try:
+        _UPDATE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        _UPDATE_CACHE.write_text(json.dumps({"ts": time.time(), "remote": remota}), encoding="utf-8")
+    except Exception:
+        pass
+    return remota
 
-    if remota is None:
-        # El cache no tenia una entrada reciente -> intentamos el fetch una vez.
-        # Escribimos el cache pase lo que pase (exito o fallo, p.ej. 404 de repo
-        # privado) para que el chequeo no le pegue a la red mas de 1 vez/dia ni
-        # siquiera cuando esta fallando de forma persistente.
-        try:
-            with urllib.request.urlopen(_UPDATE_URL, timeout=3) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            plugins = data.get("plugins") or []
-            claudit_plugin = next(
-                (p for p in plugins if isinstance(p, dict) and p.get("name") == "claudit"),
-                plugins[0] if plugins and isinstance(plugins[0], dict) else {},
-            )
-            remota = claudit_plugin.get("version")
-        except Exception:
-            remota = None
-        try:
-            _UPDATE_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            _UPDATE_CACHE.write_text(
-                json.dumps({"ts": time.time(), "remote": remota}), encoding="utf-8"
-            )
-        except Exception:
-            pass
 
-    if not remota:
+def _hay_update():
+    """(remota, instalada) si hay una version publicada MAS NUEVA que la instalada; si no, None.
+    Silencioso ante cualquier dato faltante o version no comparable."""
+    instalada = _version_instalada()
+    remota = _version_remota()
+    if not instalada or not remota:
         return None
     try:
-        es_mas_nueva = (tuple(int(x) for x in remota.split("."))
-                        > tuple(int(x) for x in instalada.split(".")))
+        if tuple(int(x) for x in remota.split(".")) > tuple(int(x) for x in instalada.split(".")):
+            return (remota, instalada)
     except Exception:
         return None
-    if not es_mas_nueva:
-        return None
+    return None
 
+
+def _chequear_update():
+    """Banner de alerta si hay version mas nueva (o None). Informativo; no bloquea."""
+    upd = _hay_update()
+    if not upd:
+        return None
+    remota, instalada = upd
     return (
         "+-----------------------------------------------------------------+\n"
         f"|  !! HAY UNA NUEVA VERSION DE CLAUDIT: {remota} (instalada: {instalada})\n"
@@ -1100,12 +1184,18 @@ def parsear_args(args):
     detalle = False
     quiere_html = False
     html_ruta = None
+    forzar = False
     posicionales = []
     i = 0
     while i < len(args):
         a = args[i]
         if a == "--detalle":
             detalle = True
+        elif a == "--force":
+            # Saltea el gate de version: genera el reporte con la version instalada
+            # aunque haya una mas nueva. Lo usa el hook (panorama siempre) y la rama
+            # "No" del slash command.
+            forzar = True
         elif a == "--html":
             quiere_html = True
             if i + 1 < len(args) and args[i + 1].lower().endswith(".html"):
@@ -1114,17 +1204,30 @@ def parsear_args(args):
         else:
             posicionales.append(a)
         i += 1
-    return detalle, quiere_html, html_ruta, posicionales
+    return detalle, quiere_html, html_ruta, forzar, posicionales
 
 
 def main():
     _limpiar_versiones_huerfanas()
-    alerta_update = _chequear_update()
-    if alerta_update:
-        print(alerta_update)
+    detalle, quiere_html, html_ruta_arg, forzar, posicionales = parsear_args(sys.argv[1:])
 
-    detalle, quiere_html, html_ruta_arg, posicionales = parsear_args(sys.argv[1:])
-    jsonl = resolver_jsonl(posicionales[0] if posicionales else None)
+    # Gate de version: si hay una version mas nueva publicada, el reporte queda
+    # BLOQUEADO hasta actualizar. --force lo saltea (rama "No" del slash command y
+    # el hook de arranque, que pasa --force para dar el panorama siempre). El slash
+    # command detecta la marca UPDATE_REQUIRED y ofrece actualizar (Yes) o --force (No).
+    upd = None if forzar else _hay_update()
+    if upd:
+        remota, instalada = upd
+        print("UPDATE_REQUIRED")
+        print(f"claudit {instalada} instalada · {remota} disponible.")
+        print("El reporte esta BLOQUEADO hasta actualizar. Actualiza y reinicia Claude,")
+        print("o genera con la version actual pasando --force.")
+        return
+    banner = _chequear_update() if forzar else None  # con --force el aviso es informativo, no bloquea
+    if banner:
+        print(banner)
+
+    jsonl = resolver_medible(posicionales[0] if posicionales else None)
     lineas = parsear_lineas(jsonl)
     filas = leer_inferencias(lineas)
     if not filas:
@@ -1165,8 +1268,14 @@ def main():
     print("CADA turno siguiente. El cache-read acumulado es el proxy del gasto.")
 
     if quiere_html:
-        stamp = time.strftime("%Y-%m-%d_%H-%M-%S")   # cada reporte, su propio archivo con fecha+hora
-        destino = Path(html_ruta_arg).resolve() if html_ruta_arg else (REPO / ".claudit" / f"report-{stamp}.html")
+        if html_ruta_arg:
+            destino = Path(html_ruta_arg).resolve()
+        else:
+            # Nombre de la subcarpeta = sesion actual (en SessionStart, la que arranca);
+            # si se paso un uuid explicito, la subcarpeta es la sesion medida.
+            id_carpeta = jsonl.stem if posicionales else (sesion_actual() or jsonl).stem
+            stamp = time.strftime("%Y-%m-%d_%H-%M-%S")   # cada report, su propio archivo con fecha+hora
+            destino = carpeta_sesion(id_carpeta) / f"report-{stamp}.html"
         generar_html(jsonl, lineas, filas, destino)
         print(f"Reporte HTML: {destino}")
 

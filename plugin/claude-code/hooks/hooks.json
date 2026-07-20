@@ -1,12 +1,12 @@
 {
-  "description": "claudit — genera el reporte HTML en .claudit/ automaticamente al cerrar la sesion (una sola vez por sesion)",
+  "description": "claudit — al INICIAR la sesion genera el reporte HTML en .claudit/<slot>_<ts>__<id>/ (panorama del setup fijo, una sola vez por sesion)",
   "hooks": {
-    "SessionEnd": [
+    "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/claudit.py\" --html",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/claudit.py\" --html --force",
             "timeout": 20,
             "async": true
           }

@@ -11,7 +11,7 @@
     {
       "name": "claudit",
       "description": "El costo REAL de tu sesión de Claude Code: cuánto se re-lee por inferencia (cache-read), cómo se compone ese prefijo y qué pieza recortar para ahorrar tokens en CADA turno. Cero dependencias.",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "author": {
         "name": "Sebastián Couto"
       },

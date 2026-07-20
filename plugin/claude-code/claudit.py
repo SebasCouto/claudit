@@ -622,11 +622,35 @@ def _hora_local(ts):
         return ts[11:19] + " UTC"
 
 
+# Gap con la inferencia previa por debajo de este umbral => misma tanda de
+# tool-calls encadenados (hermana): comparten el cache re-escrito, no son un
+# evento de write nuevo. Se colorean distinto para no leer 1 evento como N.
+_UMBRAL_HERMANA_S = 30
+
+
+def _ts_epoch(ts):
+    # ISO 8601 UTC ("2026-07-18T17:33:46.748Z") -> epoch en segundos. None si no parsea.
+    if not (isinstance(ts, str) and len(ts) >= 19 and ts[10:11] == "T"):
+        return None
+    try:
+        return datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
 def _items_write(filas):
-    return [{
-        "turno": i + 1, "value": f["write"], "hora": _hora_local(f.get("ts")),
-        "desc": f"Turno {i + 1}: tokens nuevos escritos al cache ese turno.",
-    } for i, f in enumerate(filas)]
+    items, prev = [], None
+    for i, f in enumerate(filas):
+        ep = _ts_epoch(f.get("ts"))
+        sibling = prev is not None and ep is not None and (ep - prev) < _UMBRAL_HERMANA_S
+        items.append({
+            "turno": i + 1, "value": f["write"], "hora": _hora_local(f.get("ts")),
+            "sibling": sibling,
+            "desc": f"Turno {i + 1}: tokens nuevos escritos al cache ese turno.",
+        })
+        if ep is not None:
+            prev = ep
+    return items
 
 
 def _aria_composicion(items):
@@ -879,7 +903,7 @@ __CLAUDIT_SETUP_ROWS__
     <h2>Cache-write — por inferencia</h2>
     <div class="chart-pct"><strong>__CLAUDIT_WRITE_PCT__%</strong><span>del total de tokens</span></div>
   </div>
-  <p class="muted">Una barra por turno. Altura = tokens nuevos escritos al cache ese turno (el contenido que entro y se cacheo). El pico grande esta al arranque (se cachea el setup); despues se escribe algo cada turno segun cuanto contenido nuevo entro. Aparecen picos EXTRA cuando el cache se re-crea: tras un /compact, tras un hueco de inactividad &gt;5 min (el cache expira, TTL) o al entrar contenido nuevo grande.</p>
+  <p class="muted">Una barra por turno. Altura = tokens nuevos escritos al cache ese turno (el contenido que entro y se cacheo). El pico grande esta al arranque (se cachea el setup); despues se escribe algo cada turno segun cuanto contenido nuevo entro. Aparecen picos EXTRA cuando el cache se re-crea: tras un /compact, tras un hueco de inactividad &gt;5 min (el cache expira, TTL) o al entrar contenido nuevo grande. <strong>Color:</strong> azul = primera inferencia del turno; naranja = inferencias hermanas (tool-calls encadenados del mismo turno, que comparten el cache ya re-escrito &mdash; no son un write nuevo).</p>
   <div class="chart-wrap">
     <canvas id="claudit-chart-write" height="220" role="img" aria-label="__CLAUDIT_ARIA_WRITE__"></canvas>
   </div>
@@ -988,8 +1012,8 @@ function claudinDrawBarsV(canvasId, dataId){
   var cols=[];
   items.forEach(function(it,k){
     var h=plotH*(it.value/max), x=k*slot+2;
-    c.fillStyle=claudinTok('primary'); c.fillRect(x,padTop+plotH-h,bw,Math.max(1,h));
-    cols.push({x0:k*slot, x1:(k+1)*slot, turno:it.turno, hora:it.hora||'', desc:it.desc||''});
+    c.fillStyle=claudinTok(it.sibling?'mid':'primary'); c.fillRect(x,padTop+plotH-h,bw,Math.max(1,h));
+    cols.push({x0:k*slot, x1:(k+1)*slot, turno:it.turno, hora:it.hora||'', value:it.value||0, desc:it.desc||''});
   });
   c.strokeStyle=claudinTok('line'); c.beginPath(); c.moveTo(0,padTop+plotH+0.5); c.lineTo(W,padTop+plotH+0.5); c.stroke();
   c.fillStyle=claudinTok('muted'); c.font='11px '+claudinTok('font-sans'); c.textBaseline='top';
@@ -1007,7 +1031,7 @@ function claudinDrawBarsV(canvasId, dataId){
     el.addEventListener('mousemove', function(e){
       var cs=el._cols||[], x=e.offsetX, hit=null;
       for(var i=0;i<cs.length;i++){ if(x>=cs[i].x0 && x<cs[i].x1){ hit=cs[i]; break; } }
-      if(hit && hit.desc){ claudinShowTip(e.clientX, e.clientY, 'Turno '+hit.turno+(hit.hora?' · '+hit.hora:''), hit.desc); } else { claudinHideTip(); }
+      if(hit && hit.desc){ claudinShowTip(e.clientX, e.clientY, 'Turno '+hit.turno+' · '+hit.value.toLocaleString()+' tok'+(hit.hora?' · '+hit.hora:''), hit.desc); } else { claudinHideTip(); }
     });
     el.addEventListener('mouseleave', function(){ claudinHideTip(); });
   }

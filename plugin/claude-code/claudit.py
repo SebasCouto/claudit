@@ -277,12 +277,15 @@ def secciones_md(path):
 
 
 def secciones_top(secc):
-    """Deja las secciones >= SECC_MINIMA (desc) y colapsa el resto en una fila."""
-    grandes = sorted([(t, k) for t, k in secc if k >= SECC_MINIMA], key=lambda x: -x[1])
+    """Secciones >= SECC_MINIMA + el 'resto' agregado, TODO ordenado por tokens
+    desc (= % setup desc). Como la palanca deriva de los tokens (***>=1000, **>=300,
+    *<300), ese mismo orden deja las palancas de *** a * — segundo orden gratis.
+    El 'resto' entra al sort: cae en su posicion real por peso, no pegado al final."""
+    grandes = [(t, k) for t, k in secc if k >= SECC_MINIMA]
     chicas = [(t, k) for t, k in secc if k < SECC_MINIMA]
     if chicas:
         grandes.append((f"resto ({len(chicas)} secciones menores)", sum(k for _, k in chicas)))
-    return grandes
+    return sorted(grandes, key=lambda x: -x[1])
 
 
 def palanca(tok_val, editable):
@@ -574,6 +577,48 @@ def _tips_html(setup):
     return "\n".join(filas)
 
 
+def _setup_tree_html(setup):
+    """Arbol COMPLETO del setup fijo para el HTML: cada componente + cada seccion
+    del CLAUDE.md, con tok/turno, % del setup y palanca. Espeja imprimir_setup
+    (misma data de desglose_setup: fuente unica, terminal y HTML no divergen)."""
+    total = setup["total"]
+    if total <= 0 or not setup["componentes"]:
+        return '<tr><td colspan="4" class="muted">Sin datos de setup fijo en esta sesion.</td></tr>'
+
+    def marca(tok_val, editable):
+        m = palanca(tok_val, editable)
+        return f'<span class="p-mark">{m}</span>' if m else '<span class="p-none">—</span>'
+
+    def pct(tok_val):
+        return f"{round(100 * tok_val / total)}%"
+
+    filas, editable_tot = [], 0.0
+    for c in setup["componentes"]:
+        if c["editable"]:
+            editable_tot += c["tok"]
+        cls = "r-comp" if c["editable"] else "r-comp r-base"
+        filas.append(
+            f'<tr class="{cls}"><td>{_esc(c["label"])}</td>'
+            f'<td>{_tok0(c["tok"])}</td><td>{pct(c["tok"])}</td>'
+            f'<td>{marca(c["tok"], c["editable"])}</td></tr>'
+        )
+        for titulo, tk_val in c["secc"] or []:
+            filas.append(
+                f'<tr class="r-secc"><td>{_esc(titulo)}</td>'
+                f'<td>{_tok0(tk_val)}</td><td>{pct(tk_val)}</td>'
+                f'<td>{marca(tk_val, c["editable"])}</td></tr>'
+            )
+    filas.append(
+        f'<tr class="r-total"><td>TOTAL setup fijo</td>'
+        f'<td>{_tok0(total)}</td><td>100%</td><td></td></tr>'
+    )
+    filas.append(
+        f'<tr class="r-sub"><td>de eso, editable (con palanca)</td>'
+        f'<td>{_tok0(editable_tot)}</td><td>{pct(editable_tot)}</td><td></td></tr>'
+    )
+    return "\n".join(filas)
+
+
 def generar_html(jsonl, lineas, filas, destino):
     """Arma el reporte HTML self-contained y lo escribe en `destino` (Path).
 
@@ -607,6 +652,8 @@ def generar_html(jsonl, lineas, filas, destino):
     out = out.replace("__CLAUDIT_BADGE__", _esc(usd(total_usd)))
     out = out.replace("__CLAUDIT_KPIS__", _kpi_cards_html(acum, total_usd, crec, len(filas)))
     out = out.replace("__CLAUDIT_TIPS__", _tips_html(setup))
+    out = out.replace("__CLAUDIT_SETUP_TOTAL__", _tok0(setup["total"]))
+    out = out.replace("__CLAUDIT_SETUP_ROWS__", _setup_tree_html(setup))
     out = out.replace("__CLAUDIT_ARIA_COMP__", _esc(_aria_composicion(items_comp)))
     out = out.replace("__CLAUDIT_ARIA_WRITE__", _esc(_aria_write(items_write)))
     out = out.replace("__CLAUDIT_COMP_JSON__", json.dumps(items_comp, ensure_ascii=False))
@@ -684,6 +731,19 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 #claudit-tip.on{opacity:1;}
 #claudit-tip strong{display:block;font-size:13px;margin-bottom:4px;}
 #claudit-tip span{color:var(--muted);}
+.setup-tree{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px;min-width:520px;}
+.setup-tree th{text-align:right;color:var(--muted);font-weight:600;font-size:12px;padding:7px 12px;border-bottom:1px solid var(--line);white-space:nowrap;}
+.setup-tree th:first-child{text-align:left;}
+.setup-tree td{padding:6px 12px;border-bottom:1px solid var(--line);text-align:right;font-family:var(--font-mono);white-space:nowrap;}
+.setup-tree td:first-child{text-align:left;font-family:var(--font-sans);white-space:normal;}
+.setup-tree .r-comp td{font-weight:600;}
+.setup-tree .r-comp.r-base td:first-child{color:var(--muted);font-weight:600;}
+.setup-tree .r-secc td{color:var(--muted);border-bottom:none;}
+.setup-tree .r-secc td:first-child{padding-left:30px;font-weight:400;}
+.setup-tree .r-total td{font-weight:700;border-top:2px solid var(--line);border-bottom:none;padding-top:10px;}
+.setup-tree .r-sub td{color:var(--muted);border-bottom:none;}
+.setup-tree .p-mark{color:var(--bad);font-weight:700;}
+.setup-tree .p-none{color:var(--muted);}
 </style>
 </head>
 <body>
@@ -713,6 +773,22 @@ __CLAUDIT_KPIS__
     <canvas id="claudit-chart-comp" height="260" role="img" aria-label="__CLAUDIT_ARIA_COMP__"></canvas>
   </div>
   <script type="application/json" id="claudit-data-comp">__CLAUDIT_COMP_JSON__</script>
+</section>
+
+<section class="card">
+  <div class="chart-head">
+    <h2>Setup fijo — desglose completo</h2>
+    <div class="chart-pct"><strong>__CLAUDIT_SETUP_TOTAL__</strong><span>tok/turno · piso fijo re-leido cada turno</span></div>
+  </div>
+  <p class="muted">Cada fila es un componente del piso fijo (la barra "setup fijo" de arriba, abierta). % = componente / setup fijo. Palanca = tok/turno editables que ahorras si lo recortas: <span class="p-mark">***</span> &ge;1000 · <span class="p-mark">**</span> &ge;300 · <span class="p-mark">*</span> &lt;300 · <span class="p-none">—</span> base del harness, no editable. Los CLAUDE.md se leen del disco AHORA (reflejan el estado actual).</p>
+  <div class="chart-wrap">
+    <table class="setup-tree">
+      <thead><tr><th>Componente</th><th>tok/turno</th><th>% setup</th><th>palanca</th></tr></thead>
+      <tbody>
+__CLAUDIT_SETUP_ROWS__
+      </tbody>
+    </table>
+  </div>
 </section>
 
 <section class="card">

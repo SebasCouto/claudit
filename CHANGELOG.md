@@ -8,6 +8,25 @@ del plugin vive en `plugin/claude-code/.claude-plugin/plugin.json` y se espeja e
 `.claude-plugin/marketplace.json`; un GitHub Action la incrementa automáticamente
 (ver **Versionado** en el README).
 
+## [1.2.0] - 2026-07-20
+
+### Added
+
+- Reporte HTML: nueva sección **«Setup fijo — desglose completo»** que abre el piso
+  fijo (system + tool-defs + CLAUDE.md + skills + hooks) componente por componente, y
+  cada `CLAUDE.md` sección por sección, con tok/turno, % del setup y la palanca
+  (`***`/`**`/`*`/`—`). Antes este árbol solo existía en la salida de terminal; ahora
+  el HTML muestra el mismo detalle (misma data de `desglose_setup`: fuente única,
+  terminal y HTML no divergen). Deja ver qué pesa dentro del setup fijo para recortar
+  con criterio.
+
+### Changed
+
+- Las secciones de cada `CLAUDE.md` ahora se ordenan de mayor a menor por % del setup
+  (los tokens), con la palanca cayendo de `***` a `*` como consecuencia. La fila
+  agregada **«resto»** entra al orden por su peso real en vez de quedar pegada al
+  final, donde subestimaba su tamaño. Aplica a terminal y HTML por igual.
+
 ## [1.1.0] - 2026-07-20
 
 ### Added

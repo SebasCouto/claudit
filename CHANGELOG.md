@@ -8,6 +8,18 @@ del plugin vive en `plugin/claude-code/.claude-plugin/plugin.json` y se espeja e
 `.claude-plugin/marketplace.json`; un GitHub Action la incrementa automáticamente
 (ver **Versionado** en el README).
 
+## [1.1.0] - 2026-07-20
+
+### Added
+
+- Auto-limpieza del cache: en cada corrida, claudit borra las versiones **huérfanas**
+  que Claude Code deja en `~/.claude/plugins/cache/claudit/claudit/<version>/` al
+  actualizar, en vez de esperar los 7 días del período de gracia. Preserva la versión
+  **instalada** (según `installed_plugins.json`) y la que corre la **sesión viva** —
+  borrar esa última rompería la sesión y en Windows falla por archivo en uso. Cross-OS
+  vía `shutil` (sin detectar el OS ni shellear `rm`); silenciosa ante cualquier fallo y
+  no borra nada si no puede confirmar qué preservar.
+
 ## [1.0.1] - 2026-07-19
 
 ### Fixed

@@ -1,7 +1,7 @@
 {
-  "description": "claudit — genera el reporte HTML en .claudit/ automaticamente al cerrar la sesion (una sola vez por sesion)",
+  "description": "claudit — al INICIAR la sesion genera el reporte HTML en .claudit/<slot>_<ts>__<id>/ (panorama del setup fijo, una sola vez por sesion)",
   "hooks": {
-    "SessionEnd": [
+    "SessionStart": [
       {
         "hooks": [
           {

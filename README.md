@@ -65,6 +65,25 @@ por expiración del TTL, o al entrar contenido nuevo grande).
 
 ![Cache-write por inferencia](assets/funnel-cache-write.png)
 
+### Generación automática al iniciar la sesión
+
+Al **iniciar** cada sesión, un hook `SessionStart` ejecuta `claudit --html` y deja el
+reporte en una subcarpeta por sesión: `.claudit/<slot>_<timestamp>__<id>/report-<ts>.html`.
+Así hay un **panorama del setup fijo desde el arranque**, sin ejecutar nada a mano. Cada
+corrida posterior de `claudit` durante esa sesión agrega su propio report dentro de la
+misma carpeta. Solo se conservan las **últimas 11 sesiones** (ring de slots `0_`–`10_`:
+la sesión nueva reemplaza a la más antigua de su slot). Todo vive en `.claudit/`, que se
+auto-ignora en git. El número del slot es una referencia visual; para saber cuál es la
+sesión más reciente manda el timestamp del nombre.
+
+> **Nota — primera sesión en un proyecto nuevo.** El panorama del setup fijo se calibra
+> contra una inferencia real. La sesión que recién inicia todavía no tiene ninguna, así que
+> claudit se apoya en una sesión previa del proyecto (Claude Code guarda el transcript de
+> cada sesión, con o sin el plugin instalado). El único caso sin panorama automático es la
+> **primera sesión de un proyecto sin historial**: no existe ninguna inferencia contra la
+> cual calibrar. En ese caso el reporte aparece en la primera ejecución manual de `claudit`
+> (que ya cuenta como inferencia) o en la sesión siguiente.
+
 ## Instalación
 
 Hay tres formas. La **A (Manage Plugins)** es la más a prueba de errores —sobre todo

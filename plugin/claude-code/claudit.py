@@ -13,9 +13,17 @@
 # Como CLI standalone:          python3 claudit.py [--detalle] [--html [ruta]] [<archivo.jsonl | uuid>]
 #
 # --html [ruta]  ademas del reporte de texto, escribe un reporte HTML self-contained
-#                (charts en canvas, dark/light) en `ruta`, o en REPO/.claudit/report.html
-#                si no se especifica. Crea REPO/.claudit/.gitignore con "*" para que el
-#                reporte nunca quede en el working tree del repo del usuario.
+#                (charts en canvas, dark/light) en `ruta`, o -sin ruta- en la subcarpeta
+#                de la sesion: REPO/.claudit/<slot>_<timestamp>__<id8>/report-<ts>.html
+#                (ring de 11 slots; ver carpeta_sesion). Crea REPO/.claudit/.gitignore
+#                con "*" para que nada quede en el working tree del repo del usuario.
+#
+# El hook SessionStart lo dispara al INICIAR la sesion para dar un panorama del setup
+# fijo desde el arranque. La sesion que arranca todavia no tiene inferencias, pero el
+# setup fijo es identico entre sesiones, asi que se calibra contra la ultima inferencia
+# disponible (una sesion previa cualquiera del proyecto: Claude Code escribe el .jsonl
+# de CADA sesion, haya o no plugin). Unico borde sin panorama: la 1a sesion de la vida
+# en un proyecto nuevo (cero transcripts previos) -> aparece en la 1a corrida a mano.
 #
 # Resuelve QUE proyecto medir por $CLAUDE_PROJECT_DIR (cuando corre como plugin)
 # o, si no esta seteado, por el directorio actual (cwd). Asi mide el repo activo,
@@ -61,6 +69,9 @@ CHARS_POR_TOKEN = 4
 PALANCA_ALTA = 1000
 PALANCA_MEDIA = 300
 SECC_MINIMA = 200  # secciones de CLAUDE.md por debajo de esto se colapsan en 'resto'
+RING_SLOTS = 11    # subcarpetas .claudit/0_ .. .claudit/10_; la sesion N reusa el slot N % 11
+                   # (la sesion 11 pisa la 0, la 12 pisa la 1, ...). El timestamp del nombre
+                   # manda para "cual es la ultima"; el numero es el handle visual del slot.
 
 # El repo cuya sesion medimos: $CLAUDE_PROJECT_DIR (lo inyecta Claude Code al
 # correr como plugin) o, si no esta, el directorio actual. NO la carpeta del
@@ -96,6 +107,78 @@ def resolver_jsonl(arg):
     if not sesiones:
         sys.exit(f"No hay transcripts .jsonl en {proj}")
     return sesiones[-1]
+
+
+def _tiene_inferencias(jsonl):
+    """True si el transcript tiene al menos una inferencia con usage."""
+    try:
+        return bool(leer_inferencias(parsear_lineas(jsonl)))
+    except OSError:
+        return False
+
+
+def resolver_medible(arg):
+    """jsonl a MEDIR: el arg explicito, o el mas reciente CON inferencias.
+
+    En un SessionStart la sesion que arranca todavia no tiene inferencias; el
+    setup fijo es identico entre sesiones, asi que se calibra contra la ultima
+    inferencia disponible (la sesion previa). Apenas la sesion actual produce su
+    primera inferencia, /claudit a mano ya la mide a ella.
+    """
+    if arg:
+        return resolver_jsonl(arg)
+    proj = dir_proyecto()
+    if not proj.is_dir():
+        sys.exit(f"No existe el directorio de proyecto: {proj}")
+    for s in sorted(proj.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if _tiene_inferencias(s):
+            return s
+    sys.exit("Ninguna sesion del proyecto tiene inferencias con usage todavia.")
+
+
+def sesion_actual():
+    """jsonl de la sesion en curso: la mas reciente por mtime, aunque este vacia.
+    Sirve para NOMBRAR la subcarpeta; en SessionStart es la que recien arranca."""
+    proj = dir_proyecto()
+    sesiones = sorted(proj.glob("*.jsonl"), key=lambda p: p.stat().st_mtime) if proj.is_dir() else []
+    return sesiones[-1] if sesiones else None
+
+
+def carpeta_sesion(id_sesion):
+    """Devuelve (creandola si hace falta) la subcarpeta de .claudit para la sesion.
+
+    Ring de RING_SLOTS slots (.claudit/0_ .. .claudit/10_): una sesion nueva toma
+    el slot (contador % RING_SLOTS) y PISA la carpeta que ocupara ese slot ~11
+    sesiones atras. Si la sesion ya tiene carpeta, la reusa: todos los reports de
+    esa sesion se acumulan adentro. El nombre lleva slot, timestamp local y los 8
+    primeros del session-id. Contador persistido en .claudit/.ring.
+    """
+    base = REPO / ".claudit"
+    base.mkdir(parents=True, exist_ok=True)
+    (base / ".gitignore").write_text("*\n", encoding="utf-8")
+    for suelto in base.glob("report-*.html"):  # residuos del esquema plano viejo
+        suelto.unlink()
+    id8 = id_sesion[:8]
+
+    existente = next((d for d in base.glob(f"*__{id8}") if d.is_dir()), None)
+    if existente:
+        return existente
+
+    ring = base / ".ring"
+    try:
+        ordinal = int(json.loads(ring.read_text("utf-8")).get("next", 0))
+    except (OSError, ValueError, json.JSONDecodeError):
+        ordinal = 0
+    slot = ordinal % RING_SLOTS
+    ring.write_text(json.dumps({"next": ordinal + 1}), encoding="utf-8")
+
+    for viejo in base.glob(f"{slot}_*"):  # el '_' tras el numero evita que 1_* pise 10_*
+        if viejo.is_dir():
+            shutil.rmtree(viejo, ignore_errors=True)
+
+    carpeta = base / f"{slot}_{time.strftime('%Y-%m-%d_%H-%M-%S')}__{id8}"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    return carpeta
 
 
 def usage_de(entry):
@@ -1124,7 +1207,7 @@ def main():
         print(alerta_update)
 
     detalle, quiere_html, html_ruta_arg, posicionales = parsear_args(sys.argv[1:])
-    jsonl = resolver_jsonl(posicionales[0] if posicionales else None)
+    jsonl = resolver_medible(posicionales[0] if posicionales else None)
     lineas = parsear_lineas(jsonl)
     filas = leer_inferencias(lineas)
     if not filas:
@@ -1165,8 +1248,14 @@ def main():
     print("CADA turno siguiente. El cache-read acumulado es el proxy del gasto.")
 
     if quiere_html:
-        stamp = time.strftime("%Y-%m-%d_%H-%M-%S")   # cada reporte, su propio archivo con fecha+hora
-        destino = Path(html_ruta_arg).resolve() if html_ruta_arg else (REPO / ".claudit" / f"report-{stamp}.html")
+        if html_ruta_arg:
+            destino = Path(html_ruta_arg).resolve()
+        else:
+            # Nombre de la subcarpeta = sesion actual (en SessionStart, la que arranca);
+            # si se paso un uuid explicito, la subcarpeta es la sesion medida.
+            id_carpeta = jsonl.stem if posicionales else (sesion_actual() or jsonl).stem
+            stamp = time.strftime("%Y-%m-%d_%H-%M-%S")   # cada report, su propio archivo con fecha+hora
+            destino = carpeta_sesion(id_carpeta) / f"report-{stamp}.html"
         generar_html(jsonl, lineas, filas, destino)
         print(f"Reporte HTML: {destino}")
 

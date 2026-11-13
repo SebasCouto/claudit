@@ -97,6 +97,8 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .ctx-curva text{font-size:14px;font-family:var(--font-sans);} .ctx-curva text.ctx-umbral{fill:var(--bad);} .ctx-curva text.ctx-corte{fill:var(--mid);}
 .ctx-alerta{border:1px solid var(--bad);border-radius:10px;padding:10px 14px;margin:8px 0;font-size:14px;}
 .ctx-alerta pre{font-family:var(--font-mono);font-size:12px;background:var(--surface-2);padding:8px 10px;border-radius:6px;margin:8px 0 0;overflow-x:auto;}
+.prov{font-family:var(--font-mono);font-size:12px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);}
+.prov-observed{color:var(--good);} .prov-calculated{color:var(--primary);} .prov-estimated{color:var(--mid);} .prov-unknown{color:var(--muted);}
 @media (max-width:760px){.ctx-grid{grid-template-columns:1fr;}}
 </style>
 </head>
@@ -131,6 +133,14 @@ __CLAUDIT_CONTEXTO__
   </div>
   <p class="muted">read + write + input de cada inferencia. Linea roja = donde salta el auto-compact (ventana − 33k); linea ambar = corte recomendado con CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000.</p>
 __CLAUDIT_CURVA__
+</section>
+
+<section class="card">
+  <div class="chart-head">
+    <h2>Cupo — consumo local</h2>
+  </div>
+  <p class="muted">Suma de TODAS las sesiones locales (todos los proyectos, sub-agentes incluidos) en la ventana de 5 h. Procedencia: observed = leido del transcript · calculated = suma de tokens reales · estimated = precio por modelo · unknown = sin via soportada (el cupo de la cuenta no se consulta: sin endpoints privados ni credenciales).</p>
+__CLAUDIT_CUPO__
 </section>
 
 <section class="card">

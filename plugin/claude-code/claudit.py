@@ -893,6 +893,68 @@ def imprimir_retomadas(eventos):
     print(f"  Recomendacion: {_RECO_RETOMADA}.")
 
 
+VENTANA_CUPO_H = 5
+
+
+def _es_limite(entry):
+    """Evento de limite de uso: assistant sintetico con error rate_limit (formato real
+    de Claude Code: isApiErrorMessage + error 'rate_limit')."""
+    return (isinstance(entry, dict) and entry.get("isApiErrorMessage")
+            and str(entry.get("error") or "").lower() in ("rate_limit", "usage_limit_reached"))
+
+
+def consumo_local(raiz=None, ahora=None, horas=VENTANA_CUPO_H):
+    """Uso de TODAS las sesiones locales (todos los proyectos, sub-agentes incluidos)
+    en la ventana de `horas`. Cada campo lleva su procedencia; el cupo de la cuenta no
+    se expone por una via soportada -> unknown (sin endpoints privados ni credenciales)."""
+    raiz = raiz or HOME / ".claude" / "projects"
+    ahora = ahora if ahora is not None else time.time()
+    desde = ahora - horas * 3600
+    toks = usd_tot = 0.0
+    sesiones, proyectos, limites = set(), set(), []
+    for jsonl in (raiz.rglob("*.jsonl") if raiz.is_dir() else []):
+        try:
+            if jsonl.stat().st_mtime < desde:
+                continue
+            lineas = parsear_lineas(jsonl)
+        except OSError:
+            continue
+        activa = False
+        for f in leer_inferencias(lineas):
+            t = _ts_epoch(f["ts"])
+            if t is not None and desde <= t <= ahora:
+                toks += f["read"] + f["write"] + f["input"] + f["output"]
+                usd_tot += costo(f)
+                activa = True
+        for e in lineas:
+            t = _ts_epoch(e.get("timestamp")) if _es_limite(e) else None
+            if t is not None and desde <= t <= ahora:
+                limites.append(_hora_local(e["timestamp"]))
+        if activa:
+            rel = jsonl.relative_to(raiz).parts
+            proyectos.add(rel[0])
+            sesiones.add((rel[0], rel[1].split(".")[0]))  # sub-agentes cuentan en su sesion
+    return {"horas": horas,
+            "tokens": {"valor": int(toks), "fuente": "calculated"},
+            "costo": {"valor": usd_tot, "fuente": "estimated"},
+            "sesiones": {"valor": len(sesiones), "fuente": "observed"},
+            "proyectos": {"valor": len(proyectos), "fuente": "observed"},
+            "limites": {"valor": limites, "fuente": "observed"},
+            "cupo_cuenta": {"valor": None, "fuente": "unknown"}}
+
+
+def lineas_cupo(c):
+    lim = c["limites"]["valor"]
+    out = [f"Cupo · consumo local ultimas {c['horas']} h (todos los proyectos):",
+           f"  tokens    {tok(c['tokens']['valor']).rjust(14)}  [{c['tokens']['fuente']}]",
+           f"  costo     {usd(c['costo']['valor']).rjust(14)}  [{c['costo']['fuente']}]",
+           f"  sesiones  {str(c['sesiones']['valor']).rjust(14)}  [{c['sesiones']['fuente']}]"
+           f" · proyectos {c['proyectos']['valor']}",
+           f"  limites   {str(len(lim)).rjust(14)}  [{c['limites']['fuente']}]" + (f" · {', '.join(lim[:5])}" if lim else ""),
+           f"  cupo de la cuenta: unknown (sin dato de cuenta por una via soportada)"]
+    return out
+
+
 def modelo_actual(filas):
     reales = [f.get("model") for f in filas if f.get("model") and f.get("model") != "<synthetic>"]
     return reales[-1] if reales else None
@@ -1376,6 +1438,19 @@ def _salud_hooks_html(actual, avisos):
             f'<tbody>{filas}</tbody></table>')
 
 
+def _cupo_html(c):
+    lim = c["limites"]["valor"]
+    filas = [("Tokens", _tok0(c["tokens"]["valor"]), c["tokens"]["fuente"]),
+             ("Costo", _esc(usd(c["costo"]["valor"])), c["costo"]["fuente"]),
+             ("Sesiones activas", f'{c["sesiones"]["valor"]} · {c["proyectos"]["valor"]} proyectos', c["sesiones"]["fuente"]),
+             ("Eventos de limite", f'{len(lim)}' + (f' · {_esc(", ".join(lim[:5]))}' if lim else ""), c["limites"]["fuente"]),
+             ("Cupo de la cuenta", "—", c["cupo_cuenta"]["fuente"])]
+    trs = "".join(f'<tr><td>{n}</td><td>{v}</td><td><span class="prov prov-{f}">{f}</span></td></tr>'
+                  for n, v, f in filas)
+    return (f'<table class="setup-tree"><thead><tr><th>Ultimas {c["horas"]} h</th><th>valor</th>'
+            f'<th>procedencia</th></tr></thead><tbody>{trs}</tbody></table>')
+
+
 def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None):
     """Arma el reporte HTML self-contained y lo escribe en `destino` (Path).
 
@@ -1414,6 +1489,7 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     out = out.replace("__CLAUDIT_SETUP_TOTAL__", _tok0(setup["total"]))
     out = out.replace("__CLAUDIT_SETUP_ROWS__", _setup_tree_html(setup))
     out = out.replace("__CLAUDIT_CONTEXTO__", _contexto_html(vista_contexto(lineas, filas, setup, ventana_flag)))
+    out = out.replace("__CLAUDIT_CUPO__", _cupo_html(consumo_local()))
     out = out.replace("__CLAUDIT_HOOKS__", _salud_hooks_html(*hooks_con_previa(jsonl, lineas))
                       + f'<p class="muted">{_esc(linea_primer_turno(turnos(lineas)))}</p>')
     out = out.replace("__CLAUDIT_CURVA__", _curva_contexto_html(analisis_ventana(filas))
@@ -1717,6 +1793,9 @@ def main():
     imprimir_retomadas(retomadas_cache_vencida(filas))
     imprimir_salud_hooks(*hooks_con_previa(jsonl, lineas))
     print("\n" + linea_primer_turno(turnos(lineas)))
+    print()
+    for linea in lineas_cupo(consumo_local()):
+        print(linea)
 
     if quiere_html:
         if html_ruta_arg:

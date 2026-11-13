@@ -482,73 +482,159 @@ def palanca(tok_val, editable):
     return "*"
 
 
+# Categoria de cada componente del setup, alineada con /context de Claude Code.
+# editable = se puede recortar desde la config del usuario (columna de palanca).
+CATEGORIAS = {
+    "sistema": ("System prompt", False),
+    "tools": ("System tools", False),
+    "mcp_tools": ("MCP tools", True),
+    "mcp": ("MCP server instructions", True),
+    "agentes": ("Custom agents", True),
+    "memoria": ("Memory files", True),
+    "skills": ("Skills", True),
+    "hook": ("Hooks", True),
+    "otros": ("Otros adjuntos", False),
+    "resto": ("Resto no medido", False),
+}
+
+_TXT_ADJUNTO = {  # tipo -> funcion que devuelve el texto que el adjunto aporta al prompt
+    "skill_listing": lambda a: a.get("content") or "",
+    "deferred_tools_delta": lambda a: "\n".join(a.get("addedLines") or []),
+    "mcp_instructions_delta": lambda a: "\n".join(b if isinstance(b, str) else json.dumps(b, ensure_ascii=False)
+                                                 for b in a.get("addedBlocks") or []),
+    "output_style_instructions": lambda a: (a.get("style") or {}).get("prompt") or "",
+    "session_context": lambda a: "".join(str(v) for v in (a.get("context") or {}).values()),
+    "environment": lambda a: json.dumps(a.get("snapshot") or {}, ensure_ascii=False),
+    "model": lambda a: a.get("text") or "",
+    "date": lambda a: str(a.get("date") or ""),
+    "output_style": lambda a: str(a.get("style") or ""),
+    "prompt_snapshot": lambda a: "",  # copia del system prompt: ya se mide desde api-request-shape
+}
+_ETIQUETA_ADJUNTO = {"skill_listing": "skill_listing (skills instaladas)",
+                     "deferred_tools_delta": "deferred tools (listado de nombres)",
+                     "mcp_instructions_delta": "instrucciones de servidores MCP",
+                     "output_style_instructions": "output style (instrucciones)"}
+_TIPO_ADJUNTO = {"skill_listing": "skills", "deferred_tools_delta": "tools",
+                 "mcp_instructions_delta": "mcp", "output_style_instructions": "sistema"}
+
+
+def chars_adjunto(att):
+    """(chars, categoria, estimado) que un adjunto aporta al contexto. Tipos sin
+    extractor conocido se miden como su JSON entero y quedan marcados estimados."""
+    t = att.get("type")
+    if att.get("hookName"):
+        return chars_hook(att), "hook", False
+    if t in _TXT_ADJUNTO:
+        return len(_TXT_ADJUNTO[t](att)), _TIPO_ADJUNTO.get(t, "otros"), False
+    return len(json.dumps(att, ensure_ascii=False)), "otros", True
+
+
+def _agentes(att):
+    """Lineas del listado de agentes -> ([(nombre, chars)] custom, chars built-in)."""
+    builtin = set(att.get("builtInTypes") or []) | set(att.get("builtInPluginTypes") or [])
+    custom, base = [], 0
+    for linea in att.get("addedLines") or []:
+        nombre = linea.lstrip("- ").split(":", 1)[0].strip()
+        if nombre in builtin:
+            base += len(linea)
+        else:
+            custom.append((nombre, len(linea)))
+    return custom, base
+
+
 def desglose_setup(lineas, filas):
     """Abre el setup fijo (prefijo real de la 1a inferencia) en sus componentes.
 
-    Medibles como texto: archivos de instrucciones (CLAUDE.md, MEMORY.md, rules; por
-    seccion) tal como los cargo la sesion (adjunto `instructions`), skill_listing y
-    hooks. Lo no medible (system base + tool-defs) queda como residuo =
-    setup_real - suma_medibles. Solo si el transcript no trae el adjunto se leen los
-    CLAUDE.md del disco (estado ACTUAL, marcado como estimado).
+    Todo se mide como texto desde el transcript: system prompt y tool-defs
+    (`api-request-shape`), archivos de instrucciones tal como los cargo la sesion
+    (`instructions`), skills, agentes, MCP, hooks y demas adjuntos. Lo que no se
+    pudo medir queda como 'resto' = setup_real - suma_medida. Solo si el transcript
+    no trae `instructions` se leen los CLAUDE.md del disco (estado ACTUAL, estimado).
     """
     total = filas[0]["read"] + filas[0]["write"] + filas[0]["input"]
-    skills_ch = otros_ch = 0
-    hooks_ch = {}
+    ch = lambda n: n / CHARS_POR_TOKEN
+    acum = {}  # (tipo, label) -> [chars, estimado, secc]
     memoria = {}  # path -> (tipo, texto), en orden de carga
+    forma_vista = False
+
+    def sumar(tipo, label, n, estimado=False):
+        if n <= 0:
+            return
+        c = acum.setdefault((tipo, label), [0, False])
+        c[0] += n
+        c[1] = c[1] or estimado
+
     for e in lineas:
         if usage_de(e):  # llegamos a la 1a inferencia: lo previo es setup
             break
         if not isinstance(e, dict):
             continue
         t = e.get("type")
-        if t == "attachment":
+        if t == "api-request-shape" and not forma_vista:
+            forma_vista = True
+            sh = e.get("shape") or {}
+            sumar("sistema", "system prompt", sum(len(b.get("text") or "") for b in sh.get("system") or []
+                                                  if isinstance(b, dict)))
+            for tool in sh.get("tools") or []:
+                n = len(json.dumps(tool, ensure_ascii=False))
+                if str(tool.get("name", "")).startswith("mcp__"):
+                    srv = tool["name"].split("__")[1] if tool["name"].count("__") >= 2 else "mcp"
+                    sumar("mcp_tools", f"MCP tool-defs · {srv}", n)
+                else:
+                    sumar("tools", "tool-defs (herramientas cargadas)", n)
+        elif t == "attachment":
             att = e.get("attachment") or {}
-            cont = len(att.get("content", "") or "")
-            salida = len(att.get("stdout", "") or "") + len(att.get("stderr", "") or "")
-            if att.get("type") == "instructions":
+            at = att.get("type")
+            if at == "instructions":
                 for fi in att.get("files") or []:
                     if isinstance(fi, dict) and fi.get("path"):
                         memoria[fi["path"]] = (fi.get("type") or "Memoria", fi.get("content") or "")
-                continue
-            if att.get("type") == "skill_listing":
-                skills_ch += cont
+            elif at == "agent_listing_delta":
+                custom, base = _agentes(att)
+                sumar("tools", "agentes built-in (listado)", base)
+                for nombre, n in custom:
+                    sumar("agentes", f"agente {nombre}", n)
             elif att.get("hookName"):
-                n = chars_hook(att)
-                if n:
-                    lab = etiqueta_hook(att)
-                    hooks_ch[lab] = hooks_ch.get(lab, 0) + n
+                sumar("hook", etiqueta_hook(att), chars_hook(att))
             else:
-                otros_ch += cont + salida
+                n, tipo, est = chars_adjunto(att)
+                sumar(tipo, _ETIQUETA_ADJUNTO.get(at, at or "adjunto"), n, est)
         elif t == "user":
             for b in blocks_de(e):
                 if isinstance(b, dict) and b.get("type") == "text":
-                    otros_ch += len(b.get("text", "") or "")
+                    sumar("otros", "system-reminders del primer mensaje", len(b.get("text", "") or ""))
 
-    ch = lambda n: n / CHARS_POR_TOKEN
-    comp = lambda label, tk, tipo, secc=None, estimado=False: {
-        "label": label, "tok": tk, "editable": True, "secc": secc, "tipo": tipo, "estimado": estimado}
+    comps = []
 
-    editables = []
+    def comp(tipo, label, tk, secc=None, estimado=False):
+        comps.append({"label": label, "tok": tk, "editable": CATEGORIAS[tipo][1], "secc": secc,
+                      "tipo": tipo, "estimado": estimado})
+
     if memoria:
         for path, (tipo, txt) in memoria.items():
             secc = secciones_texto(txt)
-            editables.append(comp(f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc),
-                                  "memoria", secciones_top(secc)))
+            comp("memoria", f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc), secciones_top(secc))
     else:  # transcript viejo sin adjunto `instructions`: estado actual del disco
         for tipo, path in (("User", HOME / ".claude" / "CLAUDE.md"), ("Project", REPO / "CLAUDE.md")):
             secc = secciones_md(path)
             if secc:
-                editables.append(comp(f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc),
-                                      "memoria", secciones_top(secc), estimado=True))
-    editables.append(comp("skill_listing (skills instaladas)", ch(skills_ch), "skills"))
-    editables += [comp(lab, ch(n), "hook") for lab, n in hooks_ch.items()]
-    if otros_ch:
-        editables.append(comp("otros system-reminders", ch(otros_ch), "otros"))
-    medible = sum(c["tok"] for c in editables)
+                comp("memoria", f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc),
+                     secciones_top(secc), estimado=True)
+    for (tipo, label), (n, est) in acum.items():
+        comp(tipo, label, ch(n), estimado=est)
 
-    comps = [{"label": "base harness + tool-defs (no editable)", "tok": max(0.0, total - medible),
-              "editable": False, "secc": None, "tipo": "sistema", "estimado": True}]
-    comps += sorted(editables, key=lambda c: -c["tok"])
+    medido = sum(c["tok"] for c in comps)
+    resto = total - medido
+    orden = list(CATEGORIAS)
+    # base no editable primero (en orden de /context), despues lo editable por peso desc
+    comps.sort(key=lambda c: (c["editable"], orden.index(c["tipo"]) if not c["editable"] else 0, -c["tok"]))
+    if forma_vista:
+        if abs(resto) >= 1:
+            comps.append({"label": "resto no medido (diferencia chars->tok)", "tok": resto, "editable": False,
+                          "secc": None, "tipo": "resto", "estimado": True})
+    else:  # sin api-request-shape (transcript viejo): system + tool-defs quedan como residuo
+        comps.insert(0, {"label": "base harness + tool-defs (no editable)", "tok": max(0.0, resto),
+                         "editable": False, "secc": None, "tipo": "sistema", "estimado": True})
     return {"total": total, "componentes": comps}
 
 

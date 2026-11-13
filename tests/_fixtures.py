@@ -67,3 +67,18 @@ def escribir(tmp, lineas, nombre="sesion-aaaaaaaa.jsonl"):
     p = Path(tmp) / nombre
     p.write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in lineas) + "\n", encoding="utf-8")
     return p
+
+
+def aislar_home(tc):
+    """Apunta claudit.HOME y claudit.REPO a un dir temporal vacio durante el test,
+    para que ningun fallback lea el CLAUDE.md real de la maquina."""
+    import tempfile
+    from unittest import mock
+    import claudit
+    tmp = tempfile.TemporaryDirectory()
+    home = Path(tmp.name)
+    for parche in (mock.patch.object(claudit, "HOME", home), mock.patch.object(claudit, "REPO", home / "repo")):
+        parche.start()
+        tc.addCleanup(parche.stop)
+    tc.addCleanup(tmp.cleanup)
+    return home

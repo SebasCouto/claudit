@@ -42,6 +42,9 @@ class TestEtiquetaHook(unittest.TestCase):
 
 
 class TestDesgloseHooks(unittest.TestCase):
+    def setUp(self):
+        fx.aislar_home(self)
+
     def test_un_componente_por_hook_sin_duplicar(self):
         lineas = [
             fx.adjunto(hook("SessionStart:startup", "a" * 4000, "a" * 4001, command="Cargando memoria")),

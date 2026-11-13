@@ -891,6 +891,40 @@ def modelo_actual(filas):
     return reales[-1] if reales else None
 
 
+_EFFORT_ALTO = ("xhigh", "max")
+
+
+def modelo_y_effort(lineas, filas):
+    """Modelo (ultimo + lista en orden si cambio) y effort: el observado en el ultimo
+    api-request del transcript; si no hay, effortLevel de settings.json; si no, unknown."""
+    modelos = []
+    for f in filas:
+        m = f.get("model")
+        if m and m != "<synthetic>" and (not modelos or modelos[-1] != m):
+            modelos.append(m)
+    effort, fuente = None, None
+    for entry in lineas:
+        if isinstance(entry, dict) and entry.get("type") == "api-request":
+            e = ((entry.get("params") or {}).get("output_config") or {}).get("effort")
+            if isinstance(e, str) and e:
+                effort, fuente = e, "transcript"
+    if not effort:
+        e = leer_settings().get("effortLevel")
+        effort, fuente = (e, "settings.json") if isinstance(e, str) and e else ("unknown", None)
+    return {"modelo": modelos[-1] if modelos else None, "modelos": modelos,
+            "effort": effort, "effort_fuente": fuente, "effort_alto": effort in _EFFORT_ALTO}
+
+
+def linea_modelo(m):
+    txt = f"Modelo: {m['modelo'] or 'desconocido'}"
+    if len(m["modelos"]) > 1:
+        txt += f" (cambio en la sesion: {' -> '.join(m['modelos'])})"
+    txt += f" · effort: {m['effort']}" + (f" ({m['effort_fuente']})" if m["effort_fuente"] else "")
+    if m["effort_alto"]:
+        txt += " · effort alto: mas tokens de razonamiento por turno"
+    return txt
+
+
 def vista_contexto(lineas, filas, setup, ventana_flag=None):
     """Contexto de la ultima inferencia por categoria + listas de memoria y agentes."""
     modelo = modelo_actual(filas)
@@ -1364,7 +1398,8 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     out = out.replace("__CLAUDIT_TITULO__", _esc(f"claudit — {jsonl.stem[:8]}"))
     out = out.replace(
         "__CLAUDIT_SUBTITULO__",
-        _esc(f"Sesion {jsonl.stem[:8]} · Proyecto {REPO.name} · {len(filas)} inferencias"),
+        _esc(f"Sesion {jsonl.stem[:8]} · Proyecto {REPO.name} · {len(filas)} inferencias · "
+             + linea_modelo(modelo_y_effort(lineas, filas))),
     )
     out = out.replace("__CLAUDIT_BADGE__", _esc(usd(total_usd)))
     out = out.replace("__CLAUDIT_KPIS__", _kpi_cards_html(acum, total_usd, crec, len(filas)))
@@ -1638,6 +1673,7 @@ def main():
     print("claudit — cache-read REAL de la sesion")
     print("=" * ancho)
     print(f"Sesion: {jsonl.stem[:8]} ({REPO.name})   Inferencias: {len(filas)}")
+    print(linea_modelo(modelo_y_effort(lineas, filas)))
     print("-" * ancho)
     print(f"{''.ljust(22)}{'cache-read'.rjust(13)}{'cache-write'.rjust(13)}{'input'.rjust(11)}{'output'.rjust(11)}")
     print("-" * ancho)

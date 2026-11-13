@@ -5,7 +5,7 @@
 # Lee el transcript .jsonl de la sesion (lo escribe Claude Code en ~/.claude/projects/)
 # y saca de cada inferencia los tokens reales que reporto la API:
 #   cache_read  -> prefijo cacheado, re-leido este turno (0.1x input)
-#   cache_write -> prefijo nuevo escrito al cache (1.25x input, 5 min)
+#   cache_write -> prefijo nuevo escrito al cache (1.25x input TTL 5 min, 2x TTL 1 h)
 #   input       -> input fresco no cacheado (el prompt del usuario + tool results del turno)
 #   output      -> la respuesta del modelo (lo mas caro)
 #
@@ -56,11 +56,27 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-# USD por millon de tokens (Opus 4.8; edita si cambia el pricing).
-# cache_read = 0.1x input; cache_write = 1.25x input (cache 5 min). Si la sesion usa
-# cache de 1 hora el write cuesta 2x ($10) — el write suele ser una fraccion chica del
-# total (se paga una vez por contenido nuevo; los reads dominan), asi que la aprox alcanza.
-PRECIO = {"input": 5.0, "output": 25.0, "cache_read": 0.50, "cache_write": 6.25}
+# USD por millon de tokens (input, output) por familia de modelo; edita si cambia el
+# pricing. Se matchea por substring del id (`message.model`), en orden. Lo que no
+# matchea (None, "<synthetic>") se cotiza como opus.
+PRECIOS_MODELO = (("fable", 10.0, 50.0), ("opus", 5.0, 25.0),
+                  ("sonnet", 3.0, 15.0), ("haiku", 1.0, 5.0))
+# Multiplicadores sobre input: cache_read 0.1x; cache_write 1.25x con TTL 5 min y
+# 2x con TTL 1 h (desglose en usage.cache_creation; sin desglose se asume 5 min).
+MULT_CACHE = {"cache_read": 0.1, "cache_write_5m": 1.25, "cache_write_1h": 2.0}
+
+
+_TTL_TXT = {"5m": "5 min", "1h": "1 h"}
+
+
+def precios(model):
+    """USD/MTok del modelo: input, output, cache_read, cache_write_5m, cache_write_1h."""
+    m = (model or "").lower()
+    entrada, salida = next(((i, o) for fam, i, o in PRECIOS_MODELO if fam in m),
+                           PRECIOS_MODELO[1][1:])
+    p = {"input": entrada, "output": salida}
+    p.update({k: entrada * x for k, x in MULT_CACHE.items()})
+    return p
 
 # Aproximacion chars -> tokens para las piezas del setup que solo tengo como texto
 # (CLAUDE.md, skill_listing, hooks). Afecta el balance editable-vs-base, no las
@@ -203,6 +219,20 @@ def write_tokens(u):
     return 0
 
 
+def write_ttl(u):
+    """(tokens 5m, tokens 1h) del cache-write. Sin desglose todo cuenta como 5m."""
+    total = write_tokens(u)
+    cc = u.get("cache_creation")
+    if not isinstance(cc, dict):
+        return total, 0
+    w1h = cc.get("ephemeral_1h_input_tokens") or 0
+    w5m = cc.get("ephemeral_5m_input_tokens") or 0
+    if w1h + w5m == 0:
+        return total, 0
+    resto = total - w1h if total >= w1h else w5m
+    return resto, w1h
+
+
 def parsear_lineas(jsonl):
     """Lista de entradas JSON del transcript, en orden y saltando lineas invalidas."""
     lineas = []
@@ -224,19 +254,48 @@ def leer_inferencias(lineas):
         u = usage_de(entry)
         if not u:
             continue
+        w5m, w1h = write_ttl(u)
+        msg = entry.get("message") if isinstance(entry, dict) else None
         filas.append({
             "read": u.get("cache_read_input_tokens", 0) or 0,
             "write": write_tokens(u),
+            "w5m": w5m,
+            "w1h": w1h,
             "input": u.get("input_tokens", 0) or 0,
             "output": u.get("output_tokens", 0) or 0,
             "ts": entry.get("timestamp") if isinstance(entry, dict) else None,
+            "model": msg.get("model") if isinstance(msg, dict) else None,
         })
     return filas
 
 
+def costo_partes(f):
+    """USD de una inferencia por tipo de token, al precio de su modelo y TTL."""
+    p = precios(f.get("model"))
+    w5m, w1h = f.get("w5m", f["write"]), f.get("w1h", 0)
+    return {"read": f["read"] * p["cache_read"] / 1e6,
+            "write": (w5m * p["cache_write_5m"] + w1h * p["cache_write_1h"]) / 1e6,
+            "input": f["input"] * p["input"] / 1e6,
+            "output": f["output"] * p["output"] / 1e6}
+
+
 def costo(f):
-    return (f["input"] * PRECIO["input"] + f["output"] * PRECIO["output"]
-            + f["read"] * PRECIO["cache_read"] + f["write"] * PRECIO["cache_write"]) / 1_000_000
+    return sum(costo_partes(f).values())
+
+
+def costo_por_tipo(filas):
+    tot = {"read": 0.0, "write": 0.0, "input": 0.0, "output": 0.0}
+    for f in filas:
+        for k, v in costo_partes(f).items():
+            tot[k] += v
+    return tot
+
+
+def ttl_dominante(filas):
+    """'1h' si la mayoria de los tokens escritos al cache fueron con TTL 1 h, si no '5m'."""
+    w1h = sum(f.get("w1h", 0) for f in filas)
+    w5m = sum(f.get("w5m", f["write"]) for f in filas)
+    return "1h" if w1h > w5m else "5m"
 
 
 def usd(x):
@@ -540,11 +599,12 @@ def _kpi_cards_html(acum, total_usd, crec, n_inferencias):
 _DESC_KPI = [
     "Prefijo cacheado que se re-lee en CADA inferencia, sumado en toda la sesion. "
     "Cuesta 0.1x un token de input, pero es lo que MAS gasta porque se re-lee siempre.",
-    "Contenido nuevo escrito al cache (una vez por turno). Cuesta 1.25x input; "
+    "Contenido nuevo escrito al cache (una vez por turno). Cuesta 1.25x input con TTL "
+    "5 min o 2x con TTL 1 h; "
     "se paga una sola vez, no domina el gasto.",
     "Lo que genera el modelo: thinking + texto + tool calls. El token mas caro (5x input).",
-    "USD estimado = read(0.1x) + write(1.25x) + input(1x) + output(5x), a precios de "
-    "Opus 4.8. Edita PRECIO en el script si cambia.",
+    "USD estimado = read(0.1x) + write(1.25x TTL 5 min / 2x TTL 1 h) + input(1x) + "
+    "output, al precio del modelo de cada inferencia. Edita PRECIOS_MODELO si cambia.",
     "Cuanto crecio el cache-read de la 1ra a la ultima inferencia. 10x = al final el "
     "prefijo re-leido es 10 veces mas grande.",
     "Llamadas al modelo en la sesion. Una respuesta tuya puede disparar varias (cada "
@@ -756,6 +816,7 @@ def generar_html(jsonl, lineas, filas, destino):
         (destino.parent / ".gitignore").write_text("*\n", encoding="utf-8")
 
     out = _HTML_TEMPLATE
+    out = out.replace("__CLAUDIT_TTL__", _TTL_TXT[ttl_dominante(filas)])
     out = out.replace("__CLAUDIT_TITULO__", _esc(f"claudit — {jsonl.stem[:8]}"))
     out = out.replace(
         "__CLAUDIT_SUBTITULO__",
@@ -908,7 +969,7 @@ __CLAUDIT_SETUP_ROWS__
     <h2>Cache-write — por inferencia</h2>
     <div class="chart-pct"><strong>__CLAUDIT_WRITE_PCT__%</strong><span>del total de tokens</span></div>
   </div>
-  <p class="muted">Una barra por turno. Altura = tokens nuevos escritos al cache ese turno (el contenido que entro y se cacheo). El pico grande esta al arranque (se cachea el setup); despues se escribe algo cada turno segun cuanto contenido nuevo entro. Aparecen picos EXTRA cuando el cache se re-crea: tras un /compact, tras un hueco de inactividad &gt;5 min (el cache expira, TTL) o al entrar contenido nuevo grande. <strong>Color:</strong> azul = primera inferencia del turno; naranja = inferencias hermanas (tool-calls encadenados del mismo turno, que comparten el cache ya re-escrito &mdash; no son un write nuevo).</p>
+  <p class="muted">Una barra por turno. Altura = tokens nuevos escritos al cache ese turno (el contenido que entro y se cacheo). El pico grande esta al arranque (se cachea el setup); despues se escribe algo cada turno segun cuanto contenido nuevo entro. Aparecen picos EXTRA cuando el cache se re-crea: tras un /compact, tras un hueco de inactividad &gt;__CLAUDIT_TTL__ (el cache expira, TTL) o al entrar contenido nuevo grande. <strong>Color:</strong> azul = primera inferencia del turno; naranja = inferencias hermanas (tool-calls encadenados del mismo turno, que comparten el cache ya re-escrito &mdash; no son un write nuevo).</p>
   <div class="chart-wrap">
     <canvas id="claudit-chart-write" height="220" role="img" aria-label="__CLAUDIT_ARIA_WRITE__"></canvas>
   </div>
@@ -1292,12 +1353,13 @@ def main():
 
     acum = {k: sum(f[k] for f in filas) for k in ("read", "write", "input", "output")}
     total_usd = sum(costo(f) for f in filas)
+    por_tipo = costo_por_tipo(filas)
     print("\nAcumulado en la sesion:")
-    print(f"  cache-read : {tok(acum['read']).rjust(13)} tok   ~ {usd(acum['read'] * PRECIO['cache_read'] / 1e6)}")
+    print(f"  cache-read : {tok(acum['read']).rjust(13)} tok   ~ {usd(por_tipo['read'])}")
     imprimir_composicion(composicion_prefijo(lineas, filas), desglose_setup(lineas, filas), acum["read"])
-    print(f"  cache-write: {tok(acum['write']).rjust(13)} tok   ~ {usd(acum['write'] * PRECIO['cache_write'] / 1e6)}")
-    print(f"  input      : {tok(acum['input']).rjust(13)} tok   ~ {usd(acum['input'] * PRECIO['input'] / 1e6)}")
-    print(f"  output     : {tok(acum['output']).rjust(13)} tok   ~ {usd(acum['output'] * PRECIO['output'] / 1e6)}")
+    print(f"  cache-write: {tok(acum['write']).rjust(13)} tok   ~ {usd(por_tipo['write'])}  (TTL {_TTL_TXT[ttl_dominante(filas)]})")
+    print(f"  input      : {tok(acum['input']).rjust(13)} tok   ~ {usd(por_tipo['input'])}")
+    print(f"  output     : {tok(acum['output']).rjust(13)} tok   ~ {usd(por_tipo['output'])}")
     print(f"  TOTAL estimado                        ~ {usd(total_usd)}")
     print("=" * ancho)
     print("Lente: cada inferencia re-lee el prefijo ENTERO como cache-read.")

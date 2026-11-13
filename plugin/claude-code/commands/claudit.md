@@ -11,7 +11,7 @@ sin resumirla, reordenarla ni reinterpretarla. Es un reporte de números reales:
 cualquier edición lo falsea.
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/claudit.py" --html $ARGUMENTS
+sh "${CLAUDE_PLUGIN_ROOT}/bin/claudit" --html $ARGUMENTS
 ```
 
 ## Gate de versión (obligá a actualizar)
@@ -32,7 +32,7 @@ el bloque anterior como reporte; en su lugar:
      Si el update falla, mostrá el error tal cual y ofrecé reintentar o correr con la versión actual.
    - **No** → generá el reporte con la versión actual, saltando el gate:
      ```bash
-     python3 "${CLAUDE_PLUGIN_ROOT}/claudit.py" --html --force $ARGUMENTS
+     sh "${CLAUDE_PLUGIN_ROOT}/bin/claudit" --html --force $ARGUMENTS
      ```
      y mostrá su salida verbatim (ver notas de abajo).
 

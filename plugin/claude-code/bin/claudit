@@ -1,0 +1,28 @@
+#!/bin/sh
+# Lanzador cross-platform de claudit: fuente unica para el hook y el slash command.
+#
+# En Windows `python3.exe` suele ser el stub de Microsoft Store: existe en el PATH
+# pero no ejecuta. Por eso no alcanza con `command -v`: se prueba cada candidato
+# EJECUTANDOLO y se usa el primero que sea Python >= 3.9. Los hooks y el Bash tool
+# de Claude Code corren en Git Bash en Windows, asi que `sh` esta disponible.
+#
+# --hook (primer argumento): modo hook. Si no hay Python, avisa por stderr y sale 0
+# para no romper la sesion. Sin --hook (slash command) sale 1 y el error se ve.
+case "$0" in
+  */*) BIN=${0%/*} ;;
+  *) BIN=. ;;
+esac
+DIR=$(CDPATH= cd -- "$BIN/.." && pwd)
+MODO_HOOK=0
+if [ "$1" = "--hook" ]; then
+  MODO_HOOK=1
+  shift
+fi
+for p in python3 python py; do
+  if "$p" -c "import sys; sys.exit(sys.version_info < (3, 9))" >/dev/null 2>&1; then
+    exec "$p" "$DIR/claudit.py" "$@"
+  fi
+done
+echo "claudit: no se encontro Python 3.9+ (se probo python3, python, py)" >&2
+[ "$MODO_HOOK" = 1 ] && exit 0
+exit 1

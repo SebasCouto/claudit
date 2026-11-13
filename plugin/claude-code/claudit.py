@@ -1236,7 +1236,16 @@ def parsear_args(args):
     return detalle, quiere_html, html_ruta, forzar, posicionales
 
 
+def salida_utf8():
+    """Fuerza UTF-8 en stdout/stderr: en Windows la consola y los pipes usan cp1252 y
+    los caracteres del reporte (─ ✓ · ≈) lanzan UnicodeEncodeError."""
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main():
+    salida_utf8()
     _limpiar_versiones_huerfanas()
     detalle, quiere_html, html_ruta_arg, forzar, posicionales = parsear_args(sys.argv[1:])
 

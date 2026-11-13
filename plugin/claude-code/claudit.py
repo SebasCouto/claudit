@@ -251,14 +251,21 @@ def parsear_lineas(jsonl):
 
 
 def leer_inferencias(lineas):
-    """Lista ordenada de dicts con los 4 contadores por inferencia (assistant con usage)."""
-    filas = []
+    """Lista ordenada de dicts con los 4 contadores por inferencia (assistant con usage).
+    Claude Code escribe UNA LINEA POR BLOQUE de la misma respuesta (thinking, text,
+    tool_use...) y repite el mismo usage en cada una: se cuenta una vez por message.id."""
+    filas, vistos = [], set()
     for entry in lineas:
         u = usage_de(entry)
         if not u:
             continue
-        w5m, w1h = write_ttl(u)
         msg = entry.get("message") if isinstance(entry, dict) else None
+        mid = msg.get("id") if isinstance(msg, dict) else None
+        if mid:
+            if mid in vistos:
+                continue
+            vistos.add(mid)
+        w5m, w1h = write_ttl(u)
         filas.append({
             "read": u.get("cache_read_input_tokens", 0) or 0,
             "write": write_tokens(u),

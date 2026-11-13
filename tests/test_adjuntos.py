@@ -7,7 +7,8 @@ import claudit
 
 
 def comps(lineas):
-    return claudit.desglose_setup(lineas, claudit.leer_inferencias(lineas))["componentes"]
+    return claudit.desglose_setup(lineas, claudit.leer_inferencias(lineas),
+                                  cpt_flag=claudit.CHARS_POR_TOKEN)["componentes"]
 
 
 def por_tipo(cs):

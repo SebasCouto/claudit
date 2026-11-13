@@ -78,10 +78,13 @@ def precios(model):
     p.update({k: entrada * x for k, x in MULT_CACHE.items()})
     return p
 
-# Aproximacion chars -> tokens para las piezas del setup que solo tengo como texto
-# (CLAUDE.md, skill_listing, hooks). Afecta el balance editable-vs-base, no las
-# proporciones internas. Umbrales de la columna de palanca (*), en tok/turno.
-CHARS_POR_TOKEN = 4
+# Conversion chars -> tokens para las piezas del setup que solo se tienen como texto.
+# Se CALIBRA por sesion: chars medibles del setup / tokens reales de la 1a inferencia,
+# acotado a [CPT_MIN, CPT_MAX] (texto con mucho codigo/JSON tokeniza mas denso que la
+# prosa). Sin api-request-shape no hay con que calibrar y se usa CHARS_POR_TOKEN.
+# --chars-por-token N lo fija a mano. Umbrales de la columna de palanca (*), en tok/turno.
+CHARS_POR_TOKEN = 3.0
+CPT_MIN, CPT_MAX = 2.0, 4.0
 PALANCA_ALTA = 1000
 PALANCA_MEDIA = 300
 SECC_MINIMA = 200  # secciones de CLAUDE.md por debajo de esto se colapsan en 'resto'
@@ -439,14 +442,14 @@ def abreviar_ruta(ruta, home=None):
     return r
 
 
-def secciones_md(path):
+def secciones_md(path, cpt=CHARS_POR_TOKEN):
     """Corta un CLAUDE.md del disco por headers (# y ##): [(titulo, tokens_estimados)]."""
     if not path.is_file():
         return []
-    return secciones_texto(path.read_text("utf-8", errors="replace"))
+    return secciones_texto(path.read_text("utf-8", errors="replace"), cpt)
 
 
-def secciones_texto(txt):
+def secciones_texto(txt, cpt=CHARS_POR_TOKEN):
     """Corta un markdown por headers (# y ##) y devuelve [(titulo, tokens_estimados)]."""
     partes = re.split(r"(?m)^(#{1,2} .+)$", txt)
     tramos = []
@@ -456,7 +459,7 @@ def secciones_texto(txt):
         h = partes[i].strip()
         cuerpo = partes[i + 1] if i + 1 < len(partes) else ""
         tramos.append((h.lstrip("#").strip(), len(h) + len(cuerpo)))
-    return [(t, ch / CHARS_POR_TOKEN) for t, ch in tramos]
+    return [(t, ch / cpt) for t, ch in tramos]
 
 
 def secciones_top(secc):
@@ -542,7 +545,17 @@ def _agentes(att):
     return custom, base
 
 
-def desglose_setup(lineas, filas):
+def calibrar_cpt(chars, tokens, cpt_flag=None, con_forma=True):
+    """(ratio chars/tok, fuente): 'flag' si se paso a mano; 'calibrado' contra los
+    tokens reales (solo si se midieron system prompt + tool-defs); si no 'default'."""
+    if cpt_flag:
+        return float(cpt_flag), "flag"
+    if con_forma and chars > 0 and tokens > 0:
+        return min(CPT_MAX, max(CPT_MIN, chars / tokens)), "calibrado"
+    return CHARS_POR_TOKEN, "default"
+
+
+def desglose_setup(lineas, filas, cpt_flag=None):
     """Abre el setup fijo (prefijo real de la 1a inferencia) en sus componentes.
 
     Todo se mide como texto desde el transcript: system prompt y tool-defs
@@ -552,7 +565,6 @@ def desglose_setup(lineas, filas):
     no trae `instructions` se leen los CLAUDE.md del disco (estado ACTUAL, estimado).
     """
     total = filas[0]["read"] + filas[0]["write"] + filas[0]["input"]
-    ch = lambda n: n / CHARS_POR_TOKEN
     acum = {}  # (tipo, label) -> [chars, estimado, secc]
     memoria = {}  # path -> (tipo, texto), en orden de carga
     forma_vista = False
@@ -604,22 +616,29 @@ def desglose_setup(lineas, filas):
                 if isinstance(b, dict) and b.get("type") == "text":
                     sumar("otros", "system-reminders del primer mensaje", len(b.get("text", "") or ""))
 
+    disco = []
+    if not memoria:  # transcript viejo sin adjunto `instructions`: estado actual del disco
+        for tipo, path in (("User", HOME / ".claude" / "CLAUDE.md"), ("Project", REPO / "CLAUDE.md")):
+            if path.is_file():
+                disco.append((tipo, path, path.read_text("utf-8", errors="replace")))
+    chars = (sum(n for n, _ in acum.values()) + sum(len(txt) for _, txt in memoria.values())
+             + sum(len(txt) for _, _, txt in disco))
+    ratio, fuente = calibrar_cpt(chars, total, cpt_flag, forma_vista)
+    ch = lambda n: n / ratio
+
     comps = []
 
     def comp(tipo, label, tk, secc=None, estimado=False):
         comps.append({"label": label, "tok": tk, "editable": CATEGORIAS[tipo][1], "secc": secc,
                       "tipo": tipo, "estimado": estimado})
 
-    if memoria:
-        for path, (tipo, txt) in memoria.items():
-            secc = secciones_texto(txt)
-            comp("memoria", f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc), secciones_top(secc))
-    else:  # transcript viejo sin adjunto `instructions`: estado actual del disco
-        for tipo, path in (("User", HOME / ".claude" / "CLAUDE.md"), ("Project", REPO / "CLAUDE.md")):
-            secc = secciones_md(path)
-            if secc:
-                comp("memoria", f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc),
-                     secciones_top(secc), estimado=True)
+    for path, (tipo, txt) in memoria.items():
+        secc = secciones_texto(txt, ratio)
+        comp("memoria", f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc), secciones_top(secc))
+    for tipo, path, txt in disco:
+        secc = secciones_texto(txt, ratio)
+        comp("memoria", f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc),
+             secciones_top(secc), estimado=True)
     for (tipo, label), (n, est) in acum.items():
         comp(tipo, label, ch(n), estimado=est)
 
@@ -635,7 +654,11 @@ def desglose_setup(lineas, filas):
     else:  # sin api-request-shape (transcript viejo): system + tool-defs quedan como residuo
         comps.insert(0, {"label": "base harness + tool-defs (no editable)", "tok": max(0.0, resto),
                          "editable": False, "secc": None, "tipo": "sistema", "estimado": True})
-    return {"total": total, "componentes": comps}
+    return {"total": total, "componentes": comps, "ratio": ratio, "ratio_fuente": fuente}
+
+
+_FUENTE_CPT = {"calibrado": "calibrado contra la 1a inferencia", "default": "default, sin api-request-shape",
+               "flag": "fijado con --chars-por-token"}
 
 
 def imprimir_setup(setup):
@@ -660,6 +683,7 @@ def imprimir_setup(setup):
     print(f"            {'-' * 51}")
     fila(14, "TOTAL setup fijo (100%)", total, False)
     fila(14, "de eso, editable (con palanca *)", editable_tot, False)
+    print(f"            chars->tok = {setup['ratio']:.2f} ({_FUENTE_CPT[setup['ratio_fuente']]})")
     print("            (*) palanca = tok/turno editables que se ahorran al recortar: ***>=1000 **>=300 *<300; sin marca = base no editable")
 
 
@@ -928,10 +952,15 @@ def _setup_tree_html(setup):
         f'<tr class="r-sub"><td>de eso, editable (con palanca)</td>'
         f'<td>{_tok0(editable_tot)}</td><td>{pct(editable_tot)}</td><td></td></tr>'
     )
+    if setup.get("ratio"):
+        filas.append(
+            f'<tr class="r-sub"><td colspan="4" class="muted">chars&rarr;tok = {setup["ratio"]:.2f} '
+            f'({_esc(_FUENTE_CPT[setup["ratio_fuente"]])})</td></tr>'
+        )
     return "\n".join(filas)
 
 
-def generar_html(jsonl, lineas, filas, destino):
+def generar_html(jsonl, lineas, filas, destino, cpt_flag=None):
     """Arma el reporte HTML self-contained y lo escribe en `destino` (Path).
 
     Crea el dir padre si hace falta. Si el dir padre se llama '.claudit', le
@@ -939,7 +968,7 @@ def generar_html(jsonl, lineas, filas, destino):
     el working tree del repo del usuario, sin tocar el .gitignore del usuario.
     """
     comp = composicion_prefijo(lineas, filas)
-    setup = desglose_setup(lineas, filas)
+    setup = desglose_setup(lineas, filas, cpt_flag)
     acum = {k: sum(f[k] for f in filas) for k in ("read", "write", "input", "output")}
     total_usd = sum(costo(f) for f in filas)
     crec = filas[-1]["read"] / filas[0]["read"] if filas[0]["read"] else 0
@@ -1399,6 +1428,29 @@ def _chequear_update():
     )
 
 
+def extraer_opciones(args):
+    """Saca las opciones con valor numerico (--chars-por-token N, --ventana N) de args.
+    Devuelve (opciones, resto); un valor invalido corta con error."""
+    opciones = {"chars_por_token": None, "ventana": None}
+    conv = {"--chars-por-token": ("chars_por_token", float), "--ventana": ("ventana", int)}
+    resto, i = [], 0
+    while i < len(args):
+        if args[i] in conv:
+            clave, tipo = conv[args[i]]
+            try:
+                valor = tipo(args[i + 1])
+                if valor <= 0:
+                    raise ValueError
+            except (IndexError, ValueError):
+                sys.exit(f"{args[i]} requiere un numero positivo")
+            opciones[clave] = valor
+            i += 2
+            continue
+        resto.append(args[i])
+        i += 1
+    return opciones, resto
+
+
 def parsear_args(args):
     """Separa --detalle, --html [ruta] y el argumento posicional (archivo/uuid).
 
@@ -1448,7 +1500,8 @@ def salida_utf8():
 def main():
     salida_utf8()
     _limpiar_versiones_huerfanas()
-    detalle, quiere_html, html_ruta_arg, forzar, posicionales = parsear_args(sys.argv[1:])
+    opciones, args = extraer_opciones(sys.argv[1:])
+    detalle, quiere_html, html_ruta_arg, forzar, posicionales = parsear_args(args)
 
     # Gate de version: si hay una version mas nueva publicada, el reporte queda
     # BLOQUEADO hasta actualizar. --force lo saltea (rama "No" del slash command y
@@ -1496,7 +1549,8 @@ def main():
     por_tipo = costo_por_tipo(filas)
     print("\nAcumulado en la sesion:")
     print(f"  cache-read : {tok(acum['read']).rjust(13)} tok   ~ {usd(por_tipo['read'])}")
-    imprimir_composicion(composicion_prefijo(lineas, filas), desglose_setup(lineas, filas), acum["read"])
+    imprimir_composicion(composicion_prefijo(lineas, filas),
+                         desglose_setup(lineas, filas, opciones["chars_por_token"]), acum["read"])
     print(f"  cache-write: {tok(acum['write']).rjust(13)} tok   ~ {usd(por_tipo['write'])}  (TTL {_TTL_TXT[ttl_dominante(filas)]})")
     print(f"  input      : {tok(acum['input']).rjust(13)} tok   ~ {usd(por_tipo['input'])}")
     print(f"  output     : {tok(acum['output']).rjust(13)} tok   ~ {usd(por_tipo['output'])}")
@@ -1516,7 +1570,7 @@ def main():
             id_carpeta = jsonl.stem if posicionales else (sesion_actual() or jsonl).stem
             stamp = time.strftime("%Y-%m-%d_%H-%M-%S")   # cada report, su propio archivo con fecha+hora
             destino = carpeta_sesion(id_carpeta) / f"report-{stamp}.html"
-        generar_html(jsonl, lineas, filas, destino)
+        generar_html(jsonl, lineas, filas, destino, opciones["chars_por_token"])
         print(f"Reporte HTML: {destino}")
 
 

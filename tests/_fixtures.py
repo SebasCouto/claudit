@@ -53,7 +53,7 @@ def adjunto(att, cuando=None):
 
 def forma(system_chars=4000, tools=None):
     """api-request-shape con system prompt y tool-defs de tamano conocido."""
-    tools = tools or [{"name": "Bash", "description": "x" * 2000, "input_schema": {}}]
+    tools = tools if tools is not None else [{"name": "Bash", "description": "x" * 2000, "input_schema": {}}]
     return {"type": "api-request-shape", "timestamp": ts(0),
             "shape": {"system": [{"type": "text", "text": "s" * system_chars}], "tools": tools}}
 

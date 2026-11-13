@@ -85,9 +85,14 @@ REPO = proyecto_activo()
 HOME = Path.home()
 
 
+def codificar_ruta(ruta):
+    """Nombre de carpeta que Claude Code usa en ~/.claude/projects/ para un repo:
+    todo lo no alfanumerico pasa a '-'. En Windows 'C:\\Users\\x' -> 'C--Users-x'."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(ruta))
+
+
 def dir_proyecto():
-    codificado = re.sub(r"[^A-Za-z0-9]", "-", str(REPO))
-    return HOME / ".claude" / "projects" / codificado
+    return HOME / ".claude" / "projects" / codificar_ruta(REPO)
 
 
 def resolver_jsonl(arg):

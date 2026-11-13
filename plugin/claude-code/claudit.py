@@ -321,6 +321,50 @@ def blocks_de(entry):
     return c if isinstance(c, list) else []
 
 
+def es_prompt(entry):
+    """Mensaje humano real: type user, no meta/compact, y sin bloques tool_result."""
+    if not isinstance(entry, dict) or entry.get("type") != "user":
+        return False
+    if entry.get("isMeta") or entry.get("isCompactSummary"):
+        return False
+    msg = entry.get("message")
+    c = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(c, str):
+        return bool(c.strip())
+    return isinstance(c, list) and not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c)
+
+
+def turnos(lineas):
+    """Un dict por prompt humano: inferencias que genero (message.id distintos) y
+    tool_use por nombre. Fuente unica para el 1.er turno y las tool calls por prompt."""
+    out = []
+    for entry in lineas:
+        if es_prompt(entry):
+            out.append({"ts": entry.get("timestamp"), "inferencias": 0, "tools": {}, "_ids": set()})
+            continue
+        if not out or not usage_de(entry):
+            continue
+        t = out[-1]
+        mid = (entry.get("message") or {}).get("id") or id(entry)
+        if mid not in t["_ids"]:
+            t["_ids"].add(mid)
+            t["inferencias"] += 1
+        for b in blocks_de(entry):
+            if isinstance(b, dict) and b.get("type") == "tool_use":
+                t["tools"][b.get("name") or "?"] = t["tools"].get(b.get("name") or "?", 0) + 1
+    for t in out:
+        del t["_ids"]
+    return out
+
+
+def linea_primer_turno(ts_):
+    if not ts_:
+        return "1.er turno: sin prompts"
+    t = ts_[0]
+    tools = ", ".join(f"{n} x{c}" for n, c in sorted(t["tools"].items(), key=lambda kv: -kv[1])) or "ninguna"
+    return f"1.er turno: {t['inferencias']} inferencias, tools: {tools}"
+
+
 def chars_texto(x):
     """Chars de texto de un content de tool_result: str suelto o lista de bloques."""
     if isinstance(x, str):
@@ -1328,7 +1372,8 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     out = out.replace("__CLAUDIT_SETUP_TOTAL__", _tok0(setup["total"]))
     out = out.replace("__CLAUDIT_SETUP_ROWS__", _setup_tree_html(setup))
     out = out.replace("__CLAUDIT_CONTEXTO__", _contexto_html(vista_contexto(lineas, filas, setup, ventana_flag)))
-    out = out.replace("__CLAUDIT_HOOKS__", _salud_hooks_html(*hooks_con_previa(jsonl, lineas)))
+    out = out.replace("__CLAUDIT_HOOKS__", _salud_hooks_html(*hooks_con_previa(jsonl, lineas))
+                      + f'<p class="muted">{_esc(linea_primer_turno(turnos(lineas)))}</p>')
     out = out.replace("__CLAUDIT_CURVA__", _curva_contexto_html(analisis_ventana(filas))
                       + _retomadas_html(retomadas_cache_vencida(filas)))
     out = out.replace("__CLAUDIT_ARIA_COMP__", _esc(_aria_composicion(items_comp)))
@@ -1628,6 +1673,7 @@ def main():
     imprimir_alerta_ventana(analisis_ventana(filas))
     imprimir_retomadas(retomadas_cache_vencida(filas))
     imprimir_salud_hooks(*hooks_con_previa(jsonl, lineas))
+    print("\n" + linea_primer_turno(turnos(lineas)))
 
     if quiere_html:
         if html_ruta_arg:

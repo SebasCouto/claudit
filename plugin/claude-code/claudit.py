@@ -429,11 +429,25 @@ def composicion_prefijo(lineas, filas):
     }
 
 
+def abreviar_ruta(ruta, home=None):
+    """Ruta con el home como '~' y '/' como separador (igual en Windows y macOS).
+    En Windows el home se compara sin distinguir mayusculas."""
+    norm = lambda x: str(x).replace("\\", "/").rstrip("/")
+    r, h = norm(ruta), norm(home if home is not None else HOME)
+    if h and r.lower().startswith(h.lower()) and (len(r) == len(h) or r[len(h)] == "/"):
+        return "~" + r[len(h):]
+    return r
+
+
 def secciones_md(path):
-    """Corta un CLAUDE.md por headers (# y ##) y devuelve [(titulo, tokens_estimados)]."""
+    """Corta un CLAUDE.md del disco por headers (# y ##): [(titulo, tokens_estimados)]."""
     if not path.is_file():
         return []
-    txt = path.read_text("utf-8", errors="replace")
+    return secciones_texto(path.read_text("utf-8", errors="replace"))
+
+
+def secciones_texto(txt):
+    """Corta un markdown por headers (# y ##) y devuelve [(titulo, tokens_estimados)]."""
     partes = re.split(r"(?m)^(#{1,2} .+)$", txt)
     tramos = []
     if partes[0].strip():
@@ -471,14 +485,16 @@ def palanca(tok_val, editable):
 def desglose_setup(lineas, filas):
     """Abre el setup fijo (prefijo real de la 1a inferencia) en sus componentes.
 
-    Medibles como texto: CLAUDE.md global (por seccion), CLAUDE.md proyecto (por
-    seccion), skill_listing y hooks del transcript. Lo no medible (system base +
-    tool-defs) queda como residuo = setup_real - suma_medibles. Los CLAUDE.md se
-    leen del disco AHORA, asi que reflejan el estado actual (pudo cambiar).
+    Medibles como texto: archivos de instrucciones (CLAUDE.md, MEMORY.md, rules; por
+    seccion) tal como los cargo la sesion (adjunto `instructions`), skill_listing y
+    hooks. Lo no medible (system base + tool-defs) queda como residuo =
+    setup_real - suma_medibles. Solo si el transcript no trae el adjunto se leen los
+    CLAUDE.md del disco (estado ACTUAL, marcado como estimado).
     """
     total = filas[0]["read"] + filas[0]["write"] + filas[0]["input"]
     skills_ch = otros_ch = 0
     hooks_ch = {}
+    memoria = {}  # path -> (tipo, texto), en orden de carga
     for e in lineas:
         if usage_de(e):  # llegamos a la 1a inferencia: lo previo es setup
             break
@@ -489,6 +505,11 @@ def desglose_setup(lineas, filas):
             att = e.get("attachment") or {}
             cont = len(att.get("content", "") or "")
             salida = len(att.get("stdout", "") or "") + len(att.get("stderr", "") or "")
+            if att.get("type") == "instructions":
+                for fi in att.get("files") or []:
+                    if isinstance(fi, dict) and fi.get("path"):
+                        memoria[fi["path"]] = (fi.get("type") or "Memoria", fi.get("content") or "")
+                continue
             if att.get("type") == "skill_listing":
                 skills_ch += cont
             elif att.get("hookName"):
@@ -503,24 +524,30 @@ def desglose_setup(lineas, filas):
                 if isinstance(b, dict) and b.get("type") == "text":
                     otros_ch += len(b.get("text", "") or "")
 
-    g_secc = secciones_md(HOME / ".claude" / "CLAUDE.md")
-    p_secc = secciones_md(REPO / "CLAUDE.md")
-    g_tok = sum(k for _, k in g_secc)
-    p_tok = sum(k for _, k in p_secc)
     ch = lambda n: n / CHARS_POR_TOKEN
-    medible = g_tok + p_tok + ch(skills_ch) + ch(sum(hooks_ch.values())) + ch(otros_ch)
+    comp = lambda label, tk, tipo, secc=None, estimado=False: {
+        "label": label, "tok": tk, "editable": True, "secc": secc, "tipo": tipo, "estimado": estimado}
+
+    editables = []
+    if memoria:
+        for path, (tipo, txt) in memoria.items():
+            secc = secciones_texto(txt)
+            editables.append(comp(f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc),
+                                  "memoria", secciones_top(secc)))
+    else:  # transcript viejo sin adjunto `instructions`: estado actual del disco
+        for tipo, path in (("User", HOME / ".claude" / "CLAUDE.md"), ("Project", REPO / "CLAUDE.md")):
+            secc = secciones_md(path)
+            if secc:
+                editables.append(comp(f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc),
+                                      "memoria", secciones_top(secc), estimado=True))
+    editables.append(comp("skill_listing (skills instaladas)", ch(skills_ch), "skills"))
+    editables += [comp(lab, ch(n), "hook") for lab, n in hooks_ch.items()]
+    if otros_ch:
+        editables.append(comp("otros system-reminders", ch(otros_ch), "otros"))
+    medible = sum(c["tok"] for c in editables)
 
     comps = [{"label": "base harness + tool-defs (no editable)", "tok": max(0.0, total - medible),
-              "editable": False, "secc": None}]
-    editables = [
-        {"label": "CLAUDE.md global (~/.claude)", "tok": g_tok, "editable": True, "secc": secciones_top(g_secc)},
-        {"label": "skill_listing (skills instaladas)", "tok": ch(skills_ch), "editable": True, "secc": None},
-        {"label": "CLAUDE.md proyecto", "tok": p_tok, "editable": True, "secc": secciones_top(p_secc)},
-    ]
-    editables += [{"label": lab, "tok": ch(n), "editable": True, "secc": None}
-                  for lab, n in hooks_ch.items()]
-    if otros_ch:
-        editables.append({"label": "otros system-reminders", "tok": ch(otros_ch), "editable": True, "secc": None})
+              "editable": False, "secc": None, "tipo": "sistema", "estimado": True}]
     comps += sorted(editables, key=lambda c: -c["tok"])
     return {"total": total, "componentes": comps}
 

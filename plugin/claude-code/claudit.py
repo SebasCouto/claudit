@@ -327,6 +327,28 @@ def chars_texto(x):
     return 0
 
 
+def chars_hook(att):
+    """Chars que el hook agrega al contexto: `content` es lo que ve el modelo; `stdout`
+    suele ser la misma salida (+1 char) y se usa solo si no hay `content`. stderr y los
+    async sin respuesta no entran al prompt."""
+    cont = att.get("content")
+    if isinstance(cont, str) and cont:
+        return len(cont)
+    if att.get("type") == "async_hook_response":
+        resp = att.get("response")
+        return len(json.dumps(resp, ensure_ascii=False)) if resp else 0
+    return len(att.get("stdout", "") or "")
+
+
+def etiqueta_hook(att):
+    """'hook <evento> · <origen>': origen = plugin que lo declara o, si no, el
+    statusMessage/comando que reporta Claude Code."""
+    origen = att.get("pluginId") or (att.get("command") or "").strip()
+    origen = origen if len(origen) <= 40 else origen[:39] + "…"
+    nombre = att.get("hookName") or att.get("hookEvent") or "?"
+    return f"hook {nombre}" + (f" · {origen}" if origen else "")
+
+
 def chars_salida(b):
     """Chars de un bloque de la respuesta del modelo (text / thinking / tool_use)."""
     bt = b.get("type")
@@ -390,8 +412,8 @@ def composicion_prefijo(lineas, filas):
                 continue
             if att.get("toolUseID") or att.get("hookName"):
                 name = id2name.get(att.get("toolUseID")) or ("hooks" if att.get("hookName") else "otro")
-                n = (len(att.get("stdout", "") or "") + len(att.get("stderr", "") or "")
-                     + len(att.get("content", "") or ""))
+                n = chars_hook(att) if att.get("hookName") else (
+                    len(att.get("stdout", "") or "") + len(att.get("content", "") or ""))
                 if n:
                     tools[name] = tools.get(name, 0) + n
 
@@ -455,7 +477,8 @@ def desglose_setup(lineas, filas):
     leen del disco AHORA, asi que reflejan el estado actual (pudo cambiar).
     """
     total = filas[0]["read"] + filas[0]["write"] + filas[0]["input"]
-    skills_ch = hook_ch = otros_ch = 0
+    skills_ch = otros_ch = 0
+    hooks_ch = {}
     for e in lineas:
         if usage_de(e):  # llegamos a la 1a inferencia: lo previo es setup
             break
@@ -469,7 +492,10 @@ def desglose_setup(lineas, filas):
             if att.get("type") == "skill_listing":
                 skills_ch += cont
             elif att.get("hookName"):
-                hook_ch += cont + salida
+                n = chars_hook(att)
+                if n:
+                    lab = etiqueta_hook(att)
+                    hooks_ch[lab] = hooks_ch.get(lab, 0) + n
             else:
                 otros_ch += cont + salida
         elif t == "user":
@@ -482,16 +508,17 @@ def desglose_setup(lineas, filas):
     g_tok = sum(k for _, k in g_secc)
     p_tok = sum(k for _, k in p_secc)
     ch = lambda n: n / CHARS_POR_TOKEN
-    medible = g_tok + p_tok + ch(skills_ch) + ch(hook_ch) + ch(otros_ch)
+    medible = g_tok + p_tok + ch(skills_ch) + ch(sum(hooks_ch.values())) + ch(otros_ch)
 
     comps = [{"label": "base harness + tool-defs (no editable)", "tok": max(0.0, total - medible),
               "editable": False, "secc": None}]
     editables = [
         {"label": "CLAUDE.md global (~/.claude)", "tok": g_tok, "editable": True, "secc": secciones_top(g_secc)},
         {"label": "skill_listing (skills instaladas)", "tok": ch(skills_ch), "editable": True, "secc": None},
-        {"label": "SessionStart hook (engram)", "tok": ch(hook_ch), "editable": True, "secc": None},
         {"label": "CLAUDE.md proyecto", "tok": p_tok, "editable": True, "secc": secciones_top(p_secc)},
     ]
+    editables += [{"label": lab, "tok": ch(n), "editable": True, "secc": None}
+                  for lab, n in hooks_ch.items()]
     if otros_ch:
         editables.append({"label": "otros system-reminders", "tok": ch(otros_ch), "editable": True, "secc": None})
     comps += sorted(editables, key=lambda c: -c["tok"])

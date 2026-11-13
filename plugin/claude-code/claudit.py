@@ -677,6 +677,62 @@ def ventana_modelo(model):
     return VENTANA_BASE
 
 
+VAR_AUTOCOMPACT = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+VENTANA_RECOMENDADA = 200_000
+
+
+def leer_settings():
+    """~/.claude/settings.json del usuario (dict vacio si falta o esta roto)."""
+    try:
+        d = json.loads((HOME / ".claude" / "settings.json").read_text("utf-8-sig"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def autocompact_config():
+    """(ventana, fuente) de CLAUDE_CODE_AUTO_COMPACT_WINDOW: env > settings.json env."""
+    for fuente, val in (("env", os.environ.get(VAR_AUTOCOMPACT)),
+                        ("settings.json", (leer_settings().get("env") or {}).get(VAR_AUTOCOMPACT))):
+        try:
+            n = int(str(val).strip()) if val is not None else 0
+        except ValueError:
+            n = 0
+        if n > 0:
+            return n, fuente
+    return None, None
+
+
+def analisis_ventana(filas):
+    """Contexto por inferencia (read+write+input), su maximo y la alerta de la mejora 8:
+    modelo de 1M o contexto > 200k SIN la variable de auto-compact -> fix + costo de los
+    turnos por encima de 200k - buffer (donde el auto-compact recomendado ya habria saltado)."""
+    modelo = modelo_actual(filas)
+    ctx = [f["read"] + f["write"] + f["input"] for f in filas]
+    maximo = max(ctx, default=0)
+    config, fuente = autocompact_config()
+    ventana = config or ventana_modelo(modelo)
+    corte = VENTANA_RECOMENDADA - AUTOCOMPACT_BUFFER
+    sobre = [f for f, c in zip(filas, ctx) if c > corte]
+    alerta = config is None and (maximo > VENTANA_RECOMENDADA or ventana_modelo(modelo) >= VENTANA_1M)
+    fix = json.dumps({"env": {VAR_AUTOCOMPACT: str(VENTANA_RECOMENDADA)}}, indent=2)
+    return {"modelo": modelo, "contextos": ctx, "max": maximo, "config": config, "fuente": fuente,
+            "ventana": ventana, "umbral": ventana - AUTOCOMPACT_BUFFER, "alerta": alerta, "fix": fix,
+            "corte": corte, "turnos_sobre": len(sobre), "costo_sobre": sum(costo(f) for f in sobre)}
+
+
+def imprimir_alerta_ventana(a):
+    print(f"\nContexto maximo de la sesion: {tok(a['max'])} tok · auto-compact a ~{tok(a['umbral'])}"
+          + (f" ({VAR_AUTOCOMPACT}={a['config']} via {a['fuente']})" if a["config"] else " (default del modelo)"))
+    if not a["alerta"]:
+        return
+    print(f"  ALERTA: sin {VAR_AUTOCOMPACT}, el auto-compact salta recien a ~{tok(a['umbral'])}.")
+    print(f"  {a['turnos_sobre']} turnos por encima de {tok(a['corte'])} costaron ~ {usd(a['costo_sobre'])}.")
+    print("  Fix en ~/.claude/settings.json:")
+    for linea in a["fix"].splitlines():
+        print(f"    {linea}")
+
+
 def modelo_actual(filas):
     reales = [f.get("model") for f in filas if f.get("model") and f.get("model") != "<synthetic>"]
     return reales[-1] if reales else None
@@ -685,7 +741,13 @@ def modelo_actual(filas):
 def vista_contexto(lineas, filas, setup, ventana_flag=None):
     """Contexto de la ultima inferencia por categoria + listas de memoria y agentes."""
     modelo = modelo_actual(filas)
-    ventana, fuente = (ventana_flag, "flag") if ventana_flag else (ventana_modelo(modelo), "estimada por modelo")
+    config, _ = autocompact_config()
+    if ventana_flag:
+        ventana, fuente = ventana_flag, "flag"
+    elif config:
+        ventana, fuente = config, VAR_AUTOCOMPACT
+    else:
+        ventana, fuente = ventana_modelo(modelo), "estimada por modelo"
     ult = filas[-1]
     usado = ult["read"] + ult["write"] + ult["input"] + ult["output"]
     fijo = {k: 0.0 for k in _CATS_FIJAS}
@@ -1063,6 +1125,40 @@ def _contexto_html(v):
     )
 
 
+def _curva_contexto_html(a):
+    """Curva de contexto por inferencia (SVG inline) con la linea del umbral de
+    auto-compact y la del corte recomendado (200k - buffer)."""
+    ctx = a["contextos"]
+    if not ctx:
+        return '<p class="muted">Sin inferencias.</p>'
+    w, h, pad = 1000, 240, 18
+    # Escala al contexto real; si el umbral queda muy arriba (1M) se fija al borde
+    # superior con la leyenda "fuera de escala" para que la curva siga legible.
+    tope = max(a["max"], a["corte"]) * 1.1
+    if a["umbral"] <= tope * 1.6:
+        tope = max(tope, a["umbral"] * 1.05)
+    x = lambda i: pad + (w - 2 * pad) * (i / max(1, len(ctx) - 1))
+    y = lambda v: h - pad - (h - 2 * pad) * min(v, tope) / tope
+    pts = " ".join(f"{x(i):.1f},{y(c):.1f}" for i, c in enumerate(ctx))
+    fuera = " (fuera de escala ↑)" if a["umbral"] > tope else ""
+    lineas = ""
+    for cls, val, txt in (("ctx-umbral", a["umbral"], f"auto-compact ~{_tok0(a['umbral'])}{fuera}"),
+                          ("ctx-corte", a["corte"], f"recomendado {_tok0(a['corte'])}")):
+        if not (cls == "ctx-corte" and val == a["umbral"]):
+            lineas += (f'<line class="{cls}" x1="0" x2="{w}" y1="{y(val):.1f}" y2="{y(val):.1f}"/>'
+                       f'<text class="{cls}" x="{w - 8}" y="{y(val) - 6:.1f}" text-anchor="end">{txt}</text>')
+    alerta = ""
+    if a["alerta"]:
+        alerta = (f'<div class="ctx-alerta"><strong>Sin {VAR_AUTOCOMPACT}:</strong> el auto-compact salta recien a '
+                  f'~{_tok0(a["umbral"])}. {a["turnos_sobre"]} turnos por encima de {_tok0(a["corte"])} costaron '
+                  f'~{_esc(usd(a["costo_sobre"]))}. Fix en <code>~/.claude/settings.json</code>:'
+                  f'<pre>{_esc(a["fix"])}</pre></div>')
+    return (f'{alerta}<svg class="ctx-curva" viewBox="0 0 {w} {h}" role="img" '
+            f'aria-label="Contexto por inferencia, maximo {_tok0(a["max"])}">{lineas}'
+            f'<polyline points="{pts}"/></svg>'
+            f'<p class="muted">{len(ctx)} inferencias · maximo {_tok0(a["max"])} tok</p>')
+
+
 def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None):
     """Arma el reporte HTML self-contained y lo escribe en `destino` (Path).
 
@@ -1100,6 +1196,7 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     out = out.replace("__CLAUDIT_SETUP_TOTAL__", _tok0(setup["total"]))
     out = out.replace("__CLAUDIT_SETUP_ROWS__", _setup_tree_html(setup))
     out = out.replace("__CLAUDIT_CONTEXTO__", _contexto_html(vista_contexto(lineas, filas, setup, ventana_flag)))
+    out = out.replace("__CLAUDIT_CURVA__", _curva_contexto_html(analisis_ventana(filas)))
     out = out.replace("__CLAUDIT_ARIA_COMP__", _esc(_aria_composicion(items_comp)))
     out = out.replace("__CLAUDIT_ARIA_WRITE__", _esc(_aria_write(items_write)))
     out = out.replace("__CLAUDIT_COMP_JSON__", json.dumps(items_comp, ensure_ascii=False))
@@ -1394,6 +1491,7 @@ def main():
     print("skills/distill/sub-agentes), mas grande el prefijo -> mas cache-read en")
     print("CADA turno siguiente. El cache-read acumulado es el proxy del gasto.")
     imprimir_contexto(vista_contexto(lineas, filas, setup, opciones["ventana"]))
+    imprimir_alerta_ventana(analisis_ventana(filas))
 
     if quiere_html:
         if html_ruta_arg:

@@ -90,6 +90,13 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .ctx-list li{display:flex;justify-content:space-between;gap:12px;padding:4px 0;border-bottom:1px solid var(--line);}
 .ctx-list li span{overflow-wrap:anywhere;}
 .ctx-list code{font-family:var(--font-mono);color:var(--muted);white-space:nowrap;}
+.ctx-curva{width:100%;height:auto;display:block;margin-top:10px;background:var(--surface-2);border-radius:8px;}
+.ctx-curva polyline{fill:none;stroke:var(--primary);stroke-width:2.5;stroke-linejoin:round;}
+.ctx-curva line{stroke-width:1.5;stroke-dasharray:6 5;}
+.ctx-curva line.ctx-umbral{stroke:var(--bad);} .ctx-curva line.ctx-corte{stroke:var(--mid);}
+.ctx-curva text{font-size:14px;font-family:var(--font-sans);} .ctx-curva text.ctx-umbral{fill:var(--bad);} .ctx-curva text.ctx-corte{fill:var(--mid);}
+.ctx-alerta{border:1px solid var(--bad);border-radius:10px;padding:10px 14px;margin:8px 0;font-size:14px;}
+.ctx-alerta pre{font-family:var(--font-mono);font-size:12px;background:var(--surface-2);padding:8px 10px;border-radius:6px;margin:8px 0 0;overflow-x:auto;}
 @media (max-width:760px){.ctx-grid{grid-template-columns:1fr;}}
 </style>
 </head>
@@ -116,6 +123,14 @@ __CLAUDIT_KPIS__
   </div>
   <p class="muted">Contexto de la ULTIMA inferencia por categoria, como el panel /context de Claude Code. Las categorias fijas salen del desglose del setup; Messages es el resto del contexto usado. Autocompact buffer = reserva de 33k antes del auto-compact. La ventana se estima por modelo (fijarla con --ventana N).</p>
 __CLAUDIT_CONTEXTO__
+</section>
+
+<section class="card">
+  <div class="chart-head">
+    <h2>Contexto por inferencia</h2>
+  </div>
+  <p class="muted">read + write + input de cada inferencia. Linea roja = donde salta el auto-compact (ventana − 33k); linea ambar = corte recomendado con CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000.</p>
+__CLAUDIT_CURVA__
 </section>
 
 <section class="card">

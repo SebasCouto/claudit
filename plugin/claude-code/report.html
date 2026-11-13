@@ -100,6 +100,10 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .prov{font-family:var(--font-mono);font-size:12px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);}
 .prov-observed{color:var(--good);} .prov-calculated{color:var(--primary);} .prov-estimated{color:var(--mid);} .prov-unknown{color:var(--muted);}
 @media (max-width:760px){.ctx-grid{grid-template-columns:1fr;}}
+.tabs{display:flex;gap:6px;margin-top:20px;border-bottom:1px solid var(--line);}
+.tab{cursor:pointer;background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);font:600 14px var(--font-sans);padding:10px 16px;margin-bottom:-1px;}
+.tab:hover{color:var(--ink);} .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--primary);}
+.tab:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:6px;}
 </style>
 </head>
 <body>
@@ -119,30 +123,13 @@ __CLAUDIT_KPIS__
   </div>
 </header>
 
-<section class="card">
-  <div class="chart-head">
-    <h2>Contexto actual — como /context</h2>
-  </div>
-  <p class="muted">Contexto de la ULTIMA inferencia por categoria, como el panel /context de Claude Code. Las categorias fijas salen del desglose del setup; Messages es el resto del contexto usado. Autocompact buffer = reserva de 33k antes del auto-compact. La ventana se estima por modelo (fijarla con --ventana N).</p>
-__CLAUDIT_CONTEXTO__
-</section>
+<nav class="tabs" role="tablist" aria-label="Vistas del reporte">
+  <button class="tab" role="tab" data-tab="sesion" aria-selected="true">Sesión</button>
+  <button class="tab" role="tab" data-tab="contexto" aria-selected="false">Contexto</button>
+  <button class="tab" role="tab" data-tab="uso" aria-selected="false">Uso</button>
+</nav>
 
-<section class="card">
-  <div class="chart-head">
-    <h2>Contexto por inferencia</h2>
-  </div>
-  <p class="muted">read + write + input de cada inferencia. Linea roja = donde salta el auto-compact (ventana − 33k); linea ambar = corte recomendado con CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000.</p>
-__CLAUDIT_CURVA__
-</section>
-
-<section class="card">
-  <div class="chart-head">
-    <h2>Cupo — consumo local</h2>
-  </div>
-  <p class="muted">Suma de TODAS las sesiones locales (todos los proyectos, sub-agentes incluidos) en la ventana de 5 h. Procedencia: observed = leido del transcript · calculated = suma de tokens reales · estimated = precio por modelo · unknown = sin via soportada (el cupo de la cuenta no se consulta: sin endpoints privados ni credenciales).</p>
-__CLAUDIT_CUPO__
-</section>
-
+<div class="tab-panel" role="tabpanel" data-panel="sesion">
 <section class="card">
   <div class="chart-head">
     <h2>Salud de hooks</h2>
@@ -203,6 +190,35 @@ __CLAUDIT_TIPS__
   <summary>Metodologia</summary>
   <p>El TOTAL de cache-read, cache-write, input y output de la sesion es el dato real que reporta la API de Anthropic (usage de cada inferencia del transcript) — no es una estimacion. El REPARTO interno del cache-read entre setup fijo, prompts, tool results y respuestas se estima por proporcion de caracteres del contenido del transcript, calibrado contra el prefijo real de la ultima inferencia. El total nunca se estima; el desglose interno si, y se declara como tal.</p>
 </details>
+</div>
+
+<div class="tab-panel" role="tabpanel" data-panel="contexto" hidden>
+<section class="card">
+  <div class="chart-head">
+    <h2>Contexto actual — como /context</h2>
+  </div>
+  <p class="muted">Contexto de la ULTIMA inferencia por categoria, como el panel /context de Claude Code. Las categorias fijas salen del desglose del setup; Messages es el resto del contexto usado. Autocompact buffer = reserva de 33k antes del auto-compact. La ventana se estima por modelo (fijarla con --ventana N).</p>
+__CLAUDIT_CONTEXTO__
+</section>
+
+<section class="card">
+  <div class="chart-head">
+    <h2>Contexto por inferencia</h2>
+  </div>
+  <p class="muted">read + write + input de cada inferencia. Linea roja = donde salta el auto-compact (ventana − 33k); linea ambar = corte recomendado con CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000.</p>
+__CLAUDIT_CURVA__
+</section>
+</div>
+
+<div class="tab-panel" role="tabpanel" data-panel="uso" hidden>
+<section class="card">
+  <div class="chart-head">
+    <h2>Cupo — consumo local</h2>
+  </div>
+  <p class="muted">Suma de TODAS las sesiones locales (todos los proyectos, sub-agentes incluidos) en la ventana de 5 h. Procedencia: observed = leido del transcript · calculated = suma de tokens reales · estimated = precio por modelo · unknown = sin via soportada (el cupo de la cuenta no se consulta: sin endpoints privados ni credenciales).</p>
+__CLAUDIT_CUPO__
+</section>
+</div>
 
 <footer><span>claudit · Licencia MIT — software libre, sin garantia</span><br><span class="foot-by">@by SebasCouto</span></footer>
 </main>
@@ -322,9 +338,27 @@ function claudinDrawAll(){
   claudinDrawBarsH('claudit-chart-comp','claudit-data-comp');
   claudinDrawBarsV('claudit-chart-write','claudit-data-write');
 }
+function claudinTabs(){
+  var tabs=[].slice.call(document.querySelectorAll('.tab'));
+  function abrir(n){
+    if(!tabs.some(function(t){return t.dataset.tab===n;})) n='sesion';
+    tabs.forEach(function(t){ t.setAttribute('aria-selected', String(t.dataset.tab===n)); t.tabIndex=t.dataset.tab===n?0:-1; });
+    document.querySelectorAll('.tab-panel').forEach(function(p){ p.hidden=p.dataset.panel!==n; });
+    claudinDrawAll();                                  // los canvas ocultos miden 0: redibujar al mostrarlos
+  }
+  tabs.forEach(function(t,i){
+    t.addEventListener('click', function(){ abrir(t.dataset.tab); try{history.replaceState(null,'','#'+t.dataset.tab);}catch(e){} });
+    t.addEventListener('keydown', function(e){
+      var d=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0; if(!d) return;
+      var s=tabs[(i+d+tabs.length)%tabs.length]; s.focus(); s.click();
+    });
+  });
+  abrir((location.hash||'').slice(1));
+}
 window.addEventListener('resize',claudinDrawAll);
 claudinDrawAll();
 claudinWireMetrics();
+claudinTabs();
 </script>
 </body>
 </html>

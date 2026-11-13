@@ -47,5 +47,12 @@ class TestLeerInferencias(unittest.TestCase):
         self.assertEqual(filas[0]["write"], 50)
 
 
+class TestPlantillaHtml(unittest.TestCase):
+    def test_plantilla_existe_junto_al_script_con_placeholders(self):
+        txt = claudit._HTML_TEMPLATE_PATH.read_text("utf-8")
+        self.assertTrue(txt.startswith("<!doctype html>"))
+        self.assertIn("__CLAUDIT_SETUP_ROWS__", txt)
+
+
 if __name__ == "__main__":
     unittest.main()

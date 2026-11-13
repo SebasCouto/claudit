@@ -352,6 +352,79 @@ def etiqueta_hook(att):
     return f"hook {nombre}" + (f" · {origen}" if origen else "")
 
 
+_TIPOS_HOOK = ("hook_success", "async_hook_response", "hook_system_message")
+_MARCA_DEGRADADO = re.compile(r"^\s*(warning|error)\b", re.I)
+CAIDA_HOOK = 0.8
+
+
+def salud_hooks(lineas):
+    """Hooks del arranque (antes de la 1.a inferencia): tamano y si vienen degradados.
+    Degradado = stderr no vacio, exitCode != 0, o salida cuya PRIMERA linea arranca con
+    warning/error (un 'error' en medio de memoria sana no cuenta)."""
+    out = []
+    for entry in lineas:
+        if usage_de(entry):
+            break
+        att = entry.get("attachment") if isinstance(entry, dict) else None
+        if not isinstance(att, dict) or att.get("type") not in _TIPOS_HOOK:
+            continue
+        texto = att.get("content") if isinstance(att.get("content"), str) else (att.get("stdout") or "")
+        primera = next((l for l in str(texto).splitlines() if l.strip()), "")
+        motivos = []
+        if str(att.get("stderr") or "").strip():
+            motivos.append("stderr: " + str(att["stderr"]).strip().splitlines()[0][:60])
+        if att.get("exitCode") not in (None, 0):
+            motivos.append(f"exitCode {att.get('exitCode')}")
+        if _MARCA_DEGRADADO.match(primera):
+            motivos.append(primera.strip()[:60])
+        out.append({"label": etiqueta_hook(att), "chars": chars_hook(att),
+                    "degradado": bool(motivos), "motivo": "; ".join(motivos)})
+    return out
+
+
+def comparar_hooks(actual, previa):
+    """Hooks que inyectan > 80% menos que en la sesion previa del proyecto."""
+    antes = {}
+    for h in previa:
+        antes[h["label"]] = antes.get(h["label"], 0) + h["chars"]
+    avisos = []
+    for h in actual:
+        prev = antes.get(h["label"], 0)
+        if prev and h["chars"] < (1 - CAIDA_HOOK) * prev:
+            avisos.append({"label": h["label"], "antes": prev, "ahora": h["chars"]})
+    return avisos
+
+
+def sesion_previa(jsonl):
+    """El transcript anterior (por mtime) del mismo proyecto que tenga inferencias."""
+    try:
+        mt = jsonl.stat().st_mtime
+        cands = [p for p in jsonl.parent.glob("*.jsonl") if p != jsonl and p.stat().st_mtime < mt]
+    except OSError:
+        return None
+    for p in sorted(cands, key=lambda p: -p.stat().st_mtime):
+        if _tiene_inferencias(p):
+            return p
+    return None
+
+
+def hooks_con_previa(jsonl, lineas):
+    actual = salud_hooks(lineas)
+    prev = sesion_previa(jsonl)
+    return actual, comparar_hooks(actual, salud_hooks(parsear_lineas(prev)) if prev else [])
+
+
+def imprimir_salud_hooks(actual, avisos):
+    if not actual:
+        return
+    print("\nSalud de hooks (arranque):")
+    for h in actual:
+        estado = f"DEGRADADO ({h['motivo']})" if h["degradado"] else "ok"
+        print(f"  {h['label'][:56].ljust(56)}{tok(h['chars']).rjust(9)} chars  {estado}")
+    for a in avisos:
+        print(f"  AVISO: {a['label']} inyecta mucho menos que antes ({tok(a['antes'])} -> {tok(a['ahora'])} chars)")
+
+
 def chars_salida(b):
     """Chars de un bloque de la respuesta del modelo (text / thinking / tool_use)."""
     bt = b.get("type")
@@ -1205,6 +1278,19 @@ def _retomadas_html(eventos):
             f'<p class="muted">Recomendacion: {_esc(_RECO_RETOMADA)}.</p></div>')
 
 
+def _salud_hooks_html(actual, avisos):
+    if not actual:
+        return '<p class="muted">Sin hooks en el arranque.</p>'
+    filas = "".join(
+        f'<tr><td>{_esc(h["label"])}</td><td>{_tok0(h["chars"])}</td>'
+        f'<td>{"<span class=p-mark>degradado</span> " + _esc(h["motivo"]) if h["degradado"] else "ok"}</td></tr>'
+        for h in actual)
+    av = "".join(f'<div class="ctx-alerta">{_esc(a["label"])} inyecta mucho menos que en la sesion previa: '
+                 f'{_tok0(a["antes"])} &rarr; {_tok0(a["ahora"])} chars.</div>' for a in avisos)
+    return (f'{av}<table class="setup-tree"><thead><tr><th>Hook</th><th>chars</th><th>estado</th></tr></thead>'
+            f'<tbody>{filas}</tbody></table>')
+
+
 def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None):
     """Arma el reporte HTML self-contained y lo escribe en `destino` (Path).
 
@@ -1242,6 +1328,7 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     out = out.replace("__CLAUDIT_SETUP_TOTAL__", _tok0(setup["total"]))
     out = out.replace("__CLAUDIT_SETUP_ROWS__", _setup_tree_html(setup))
     out = out.replace("__CLAUDIT_CONTEXTO__", _contexto_html(vista_contexto(lineas, filas, setup, ventana_flag)))
+    out = out.replace("__CLAUDIT_HOOKS__", _salud_hooks_html(*hooks_con_previa(jsonl, lineas)))
     out = out.replace("__CLAUDIT_CURVA__", _curva_contexto_html(analisis_ventana(filas))
                       + _retomadas_html(retomadas_cache_vencida(filas)))
     out = out.replace("__CLAUDIT_ARIA_COMP__", _esc(_aria_composicion(items_comp)))
@@ -1540,6 +1627,7 @@ def main():
     imprimir_contexto(vista_contexto(lineas, filas, setup, opciones["ventana"]))
     imprimir_alerta_ventana(analisis_ventana(filas))
     imprimir_retomadas(retomadas_cache_vencida(filas))
+    imprimir_salud_hooks(*hooks_con_previa(jsonl, lineas))
 
     if quiere_html:
         if html_ruta_arg:

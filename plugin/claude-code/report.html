@@ -135,6 +135,14 @@ __CLAUDIT_CURVA__
 
 <section class="card">
   <div class="chart-head">
+    <h2>Salud de hooks</h2>
+  </div>
+  <p class="muted">Hooks del arranque: chars que inyectan al contexto. Degradado = stderr, exitCode != 0 o salida que arranca con warning/error. Se compara con la sesion previa del proyecto (caida &gt; 80% = aviso).</p>
+__CLAUDIT_HOOKS__
+</section>
+
+<section class="card">
+  <div class="chart-head">
     <h2>Cache-read — composicion del prefijo</h2>
     <div class="chart-pct"><strong>__CLAUDIT_READ_PCT__%</strong><span>del total de tokens · lo que se reenvia cada turno</span></div>
   </div>

@@ -107,6 +107,15 @@ class TestMetricasUso(unittest.TestCase):
         self.assertAlmostEqual(t["adherencia"], 2 / 12)
         self.assertEqual(dict(self.nov["modelos"]), {"claude-opus-5-5": 4, "claude-sonnet-5-5": 1})
 
+    def test_sin_meses_no_dibuja_paginador(self):
+        self.assertNotIn("uso-prev", claudit._uso_html({"meses": [], "hoy": "2026-11-12"}))
+
+    def test_html_embebe_json_y_paginador(self):
+        html = claudit._uso_html(self.u)
+        self.assertIn('id="claudit-data-uso"', html)
+        self.assertIn("uso-prev", html)
+        self.assertIn("2026-11", html)
+
 
 if __name__ == "__main__":
     unittest.main()

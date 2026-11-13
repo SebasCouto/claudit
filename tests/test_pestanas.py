@@ -17,6 +17,7 @@ class TestPestanas(unittest.TestCase):
         panel = lambda n: self.tpl.split(f'data-panel="{n}"')[1].split('class="tab-panel"')[0]
         self.assertIn("__CLAUDIT_CONTEXTO__", panel("contexto"))
         self.assertIn("__CLAUDIT_CUPO__", panel("uso"))
+        self.assertIn("__CLAUDIT_USO__", panel("uso"))
         self.assertIn("__CLAUDIT_SETUP_ROWS__", panel("sesion"))
 
 

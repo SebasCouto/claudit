@@ -1620,6 +1620,22 @@ def _cupo_html(c):
             f'<th>procedencia</th></tr></thead><tbody>{trs}</tbody></table>')
 
 
+def _uso_html(u):
+    """Contenedores de la pestaña Uso + los meses como JSON; el JS del template dibuja
+    el mes elegido con el paginador ‹ ›."""
+    if not u["meses"]:
+        return f'<p class="muted">Sin sesiones locales en los ultimos {USO_MESES} meses.</p>'
+    datos = json.dumps(u, ensure_ascii=False).replace("</", "<\\/")
+    return ('<div class="uso-pager"><button class="btn uso-prev" type="button" aria-label="Mes anterior">‹</button>'
+            '<strong id="uso-mes" aria-live="polite"></strong>'
+            '<button class="btn uso-next" type="button" aria-label="Mes siguiente">›</button></div>'
+            '<div class="metric-boxes" id="uso-kpis"></div>'
+            '<div class="uso-grid" id="uso-charts"></div>'
+            '<div class="uso-grid"><div id="uso-skills"></div><div id="uso-conectores"></div></div>'
+            '<div id="uso-modelos"></div>'
+            f'<script type="application/json" id="claudit-data-uso">{datos}</script>')
+
+
 def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None):
     """Arma el reporte HTML self-contained y lo escribe en `destino` (Path).
 
@@ -1659,6 +1675,7 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     out = out.replace("__CLAUDIT_SETUP_ROWS__", _setup_tree_html(setup))
     out = out.replace("__CLAUDIT_CONTEXTO__", _contexto_html(vista_contexto(lineas, filas, setup, ventana_flag)))
     out = out.replace("__CLAUDIT_CUPO__", _cupo_html(consumo_local()))
+    out = out.replace("__CLAUDIT_USO__", _uso_html(metricas_uso()))
     out = out.replace("__CLAUDIT_HOOKS__", _salud_hooks_html(*hooks_con_previa(jsonl, lineas))
                       + f'<p class="muted">{_esc(linea_primer_turno(turnos(lineas)))}</p>')
     out = out.replace("__CLAUDIT_CURVA__", _curva_contexto_html(analisis_ventana(filas))

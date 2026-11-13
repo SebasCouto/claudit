@@ -104,6 +104,18 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .tab{cursor:pointer;background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);font:600 14px var(--font-sans);padding:10px 16px;margin-bottom:-1px;}
 .tab:hover{color:var(--ink);} .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--primary);}
 .tab:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:6px;}
+.uso-pager{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin:4px 0 6px;}
+.uso-pager strong{min-width:150px;text-align:center;font-size:15px;}
+.uso-chart .setup-tree{min-width:0;}
+.uso-pager .btn{padding:4px 12px;font-size:16px;} .uso-pager .btn:disabled{opacity:.35;cursor:default;}
+.uso-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px 24px;margin-top:18px;}
+.uso-chart{border:1px solid var(--line);background:var(--surface-2);border-radius:12px;padding:14px 16px;}
+.uso-chart h3{display:flex;justify-content:space-between;gap:10px;font-size:14px;}
+.uso-chart h3 span{color:var(--muted);font-weight:400;font-family:var(--font-mono);font-size:13px;}
+.uso-chart svg{width:100%;height:auto;display:block;}
+.uso-chart .bar{fill:var(--primary);} .uso-chart .hit{fill:transparent;} .uso-chart .hit:hover+.bar,.uso-chart .on{fill:var(--ink);}
+.uso-chart .grid{stroke:var(--line);stroke-width:1;} .uso-chart text{fill:var(--muted);font:12px var(--font-sans);}
+@media (max-width:760px){.uso-grid{grid-template-columns:1fr;}}
 </style>
 </head>
 <body>
@@ -217,6 +229,14 @@ __CLAUDIT_CURVA__
   </div>
   <p class="muted">Suma de TODAS las sesiones locales (todos los proyectos, sub-agentes incluidos) en la ventana de 5 h. Procedencia: observed = leido del transcript · calculated = suma de tokens reales · estimated = precio por modelo · unknown = sin via soportada (el cupo de la cuenta no se consulta: sin endpoints privados ni credenciales).</p>
 __CLAUDIT_CUPO__
+</section>
+
+<section class="card">
+  <div class="chart-head">
+    <h2>Uso por mes — todas las sesiones locales</h2>
+  </div>
+  <p class="muted">Metricas estilo dashboard de Claude, pero de un solo usuario y calculadas del transcript local de TODOS los proyectos (sub-agentes incluidos). Lineas aceptadas = lineas agregadas por Edit/Write aplicados; accept rate = ediciones aplicadas / (aplicadas + rechazadas); acciones por prompt = tool calls / prompts humanos; adherencia = dias activos / dias transcurridos del mes. Costo estimado por precio de modelo.</p>
+__CLAUDIT_USO__
 </section>
 </div>
 
@@ -338,6 +358,85 @@ function claudinDrawAll(){
   claudinDrawBarsH('claudit-chart-comp','claudit-data-comp');
   claudinDrawBarsV('claudit-chart-write','claudit-data-write');
 }
+var CLAUDIT_USO_SERIES=[
+  {k:'sesiones', t:'Sesiones por dia', f:function(v){return v.toLocaleString();}},
+  {k:'prompts', t:'Prompts por dia', f:function(v){return v.toLocaleString();}},
+  {k:'lineas', t:'Lineas aceptadas por dia', f:function(v){return v.toLocaleString();}},
+  {k:'app', t:'Acciones por prompt', f:function(v){return v.toFixed(1);}, avg:true},
+  {k:'inferencias', t:'Inferencias por dia', f:function(v){return v.toLocaleString();}},
+  {k:'costo', t:'Costo estimado por dia', f:function(v){return '$'+v.toFixed(2);}, tick:function(v){return '$'+Math.round(v);}}
+];
+
+function claudinBarsSvg(dias, serie){
+  var W=600, H=190, L=44, B=24, T=10, n=dias.length, slot=(W-L)/n, bw=Math.max(2,slot-2), r=Math.min(4,bw/2);
+  var vals=dias.map(function(d){ return serie.k==='app' ? (d.prompts? d.tools/d.prompts : 0) : d[serie.k]; });
+  var top=Math.max.apply(null,vals)||1, p10=Math.pow(10,Math.floor(Math.log10(top))), fr=top/p10;
+  var max=(fr<=1?1:fr<=2?2:fr<=5?5:10)*p10, ph=H-B-T, s='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="';
+  var imax=vals.indexOf(Math.max.apply(null,vals));
+  s+=claudinEscHtml(serie.t+': maximo '+serie.f(vals[imax]||0)+' el '+dias[imax].fecha)+'">';
+  [0,.5,1].forEach(function(p){ var y=T+ph*(1-p)+.5;
+    s+='<line class="grid" x1="'+L+'" x2="'+W+'" y1="'+y+'" y2="'+y+'"/><text x="'+(L-6)+'" y="'+(y+4)+'" text-anchor="end">'+claudinEscHtml((serie.tick||serie.f)(max*p))+'</text>'; });
+  dias.forEach(function(d,i){
+    var v=vals[i], h=ph*v/max, x=L+i*slot+1, y=T+ph-h, base=T+ph, dia=+d.fecha.slice(8);
+    s+='<rect class="hit" data-i="'+i+'" x="'+(L+i*slot)+'" y="'+T+'" width="'+slot+'" height="'+ph+'"/>';
+    if(h>0){ var rr=Math.min(r,h);
+      s+='<path class="bar" d="M'+x+','+base+'V'+(y+rr)+'Q'+x+','+y+' '+(x+rr)+','+y+'H'+(x+bw-rr)+'Q'+(x+bw)+','+y+' '+(x+bw)+','+(y+rr)+'V'+base+'Z"/>'; }
+    else s+='<path class="bar"/>';
+    if(dia===1||dia%5===0) s+='<text x="'+(x+bw/2)+'" y="'+(H-6)+'" text-anchor="middle">'+dia+'</text>';
+  });
+  return s+'</svg>';
+}
+
+function claudinUsoTabla(titulo, cols, filas){
+  if(!filas.length) return '<div class="uso-chart"><h3>'+titulo+'</h3><p class="muted">Sin datos este mes.</p></div>';
+  var th=cols.map(function(c,i){return '<th>'+c+'</th>';}).join('');
+  var tr=filas.map(function(f){return '<tr>'+f.map(function(v){return '<td>'+claudinEscHtml(v)+'</td>';}).join('')+'</tr>';}).join('');
+  return '<div class="uso-chart chart-wrap"><h3>'+titulo+'</h3><table class="setup-tree"><thead><tr>'+th+'</tr></thead><tbody>'+tr+'</tbody></table></div>';
+}
+
+function claudinUso(){
+  var el=document.getElementById('claudit-data-uso'); if(!el) return;
+  var u; try{u=JSON.parse(el.textContent);}catch(e){return;}
+  var idx=u.meses.length-1, prev=document.querySelector('.uso-prev'), next=document.querySelector('.uso-next');
+  function pct(x){return x==null?'—':(x*100).toFixed(1)+'%';}
+  function pintar(){
+    var m=u.meses[idx], t=m.totales, p=m.mes.split('-');
+    var lbl=new Date(+p[0],+p[1]-1,1).toLocaleDateString('es',{month:'long',year:'numeric'});
+    document.getElementById('uso-mes').textContent=lbl.charAt(0).toUpperCase()+lbl.slice(1);
+    prev.disabled=idx===0; next.disabled=idx===u.meses.length-1;
+    var kpis=[['Lineas aceptadas',t.lineas.toLocaleString(),'Lineas agregadas por Edit/Write aplicados en el mes.'],
+      ['Accept rate',pct(t.accept_rate),t.aceptadas+' ediciones aplicadas · '+t.rechazadas+' rechazadas.'],
+      ['Acciones por prompt',t.acciones_por_prompt==null?'—':t.acciones_por_prompt.toFixed(1),t.tools.toLocaleString()+' tool calls / '+t.prompts.toLocaleString()+' prompts. Mas alto = mas trabajo delegado.'],
+      ['Dias activos',t.dias_activos+' / '+t.dias_transcurridos,'Adherencia (tipo DAU/MAU) '+pct(t.adherencia)+' · '+t.dias_activos_7d+' de los ultimos 7 dias.'],
+      ['Sesiones',t.sesiones.toLocaleString(),t.inferencias.toLocaleString()+' inferencias · '+(t.tokens/1e6).toFixed(1)+'M tokens.'],
+      ['Costo estimado','$'+t.costo.toFixed(2),'Precio por modelo sobre tokens reales (estimated).']];
+    document.getElementById('uso-kpis').innerHTML=kpis.map(function(k){
+      return '<div class="metric" data-tip="'+claudinEscHtml(k[2])+'"><strong>'+claudinEscHtml(k[1])+'</strong><span>'+k[0]+'</span></div>';}).join('');
+    claudinWireMetrics();
+    var charts=document.getElementById('uso-charts');
+    charts.innerHTML=CLAUDIT_USO_SERIES.map(function(s){
+      var tot=s.avg ? (t.acciones_por_prompt||0) : s.k==='sesiones' ? t.sesiones : m.dias.reduce(function(a,d){return a+d[s.k];},0);
+      return '<div class="uso-chart" data-k="'+s.k+'"><h3>'+s.t+'<span>'+(s.avg?'prom. ':s.k==='sesiones'?'distintas ':'total ')+claudinEscHtml(s.f(tot))+'</span></h3>'+claudinBarsSvg(m.dias,s)+'</div>';
+    }).join('');
+    charts.querySelectorAll('.uso-chart').forEach(function(c){
+      var s=CLAUDIT_USO_SERIES.filter(function(x){return x.k===c.dataset.k;})[0];
+      c.querySelectorAll('.hit').forEach(function(h){
+        h.addEventListener('mousemove',function(e){ var d=m.dias[+h.dataset.i];
+          var v=s.k==='app'?(d.prompts?d.tools/d.prompts:0):d[s.k];
+          claudinShowTip(e.clientX,e.clientY,d.fecha,s.t+': '+s.f(v)+' · '+d.sesiones+' sesiones · '+d.prompts+' prompts'); });
+        h.addEventListener('mouseleave',claudinHideTip);
+      });
+    });
+    document.getElementById('uso-skills').innerHTML=claudinUsoTabla('Skills',['Skill','Usos'],m.skills.slice(0,15));
+    document.getElementById('uso-conectores').innerHTML=claudinUsoTabla('Conectores (MCP)',['Conector','Lecturas','Escrituras'],
+      m.conectores.slice(0,15).map(function(c){return [c.servidor,c.lecturas,c.escrituras];}));
+    document.getElementById('uso-modelos').innerHTML='<div class="uso-grid">'+claudinUsoTabla('Modelos',['Modelo','Inferencias'],m.modelos)+'</div>';
+  }
+  prev.addEventListener('click',function(){ if(idx>0){idx--;pintar();} });
+  next.addEventListener('click',function(){ if(idx<u.meses.length-1){idx++;pintar();} });
+  pintar();
+}
+
 function claudinTabs(){
   var tabs=[].slice.call(document.querySelectorAll('.tab'));
   function abrir(n){
@@ -358,6 +457,7 @@ function claudinTabs(){
 window.addEventListener('resize',claudinDrawAll);
 claudinDrawAll();
 claudinWireMetrics();
+claudinUso();
 claudinTabs();
 </script>
 </body>

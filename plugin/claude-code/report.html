@@ -75,6 +75,22 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .setup-tree .r-sub td{color:var(--muted);border-bottom:none;}
 .setup-tree .p-mark{color:var(--bad);font-weight:700;}
 .setup-tree .p-none{color:var(--muted);}
+.k-sistema{--k:hsl(215 12% 55%);} .k-tools{--k:hsl(220 80% 65%);} .k-mcp_tools{--k:hsl(175 60% 45%);}
+.k-mcp{--k:hsl(190 70% 55%);} .k-agentes{--k:hsl(265 70% 68%);} .k-memoria{--k:hsl(38 92% 55%);}
+.k-skills{--k:hsl(142 55% 50%);} .k-mensajes{--k:var(--primary);} .k-buffer{--k:hsl(0 0% 40%);} .k-libre{--k:var(--surface-2);}
+.ctx-head{margin:4px 0 12px;font-size:15px;}
+.ctx-bar{display:flex;height:22px;border-radius:6px;overflow:hidden;background:var(--surface-2);border:1px solid var(--line);}
+.ctx-seg{background:var(--k);min-width:1px;}
+.ctx-seg.k-buffer{background:repeating-linear-gradient(45deg,var(--k) 0 4px,transparent 4px 8px);}
+.ctx-dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:8px;background:var(--k);border:1px solid var(--line);vertical-align:-1px;}
+.ctx-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;margin-top:12px;}
+.ctx-table{min-width:0;}
+.ctx-list h3{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:10px 0 6px;}
+.ctx-list ul{list-style:none;margin:0;padding:0;font-size:13px;}
+.ctx-list li{display:flex;justify-content:space-between;gap:12px;padding:4px 0;border-bottom:1px solid var(--line);}
+.ctx-list li span{overflow-wrap:anywhere;}
+.ctx-list code{font-family:var(--font-mono);color:var(--muted);white-space:nowrap;}
+@media (max-width:760px){.ctx-grid{grid-template-columns:1fr;}}
 </style>
 </head>
 <body>
@@ -96,6 +112,14 @@ __CLAUDIT_KPIS__
 
 <section class="card">
   <div class="chart-head">
+    <h2>Contexto actual — como /context</h2>
+  </div>
+  <p class="muted">Contexto de la ULTIMA inferencia por categoria, como el panel /context de Claude Code. Las categorias fijas salen del desglose del setup; Messages es el resto del contexto usado. Autocompact buffer = reserva de 33k antes del auto-compact. La ventana se estima por modelo (fijarla con --ventana N).</p>
+__CLAUDIT_CONTEXTO__
+</section>
+
+<section class="card">
+  <div class="chart-head">
     <h2>Cache-read — composicion del prefijo</h2>
     <div class="chart-pct"><strong>__CLAUDIT_READ_PCT__%</strong><span>del total de tokens · lo que se reenvia cada turno</span></div>
   </div>
@@ -111,7 +135,7 @@ __CLAUDIT_KPIS__
     <h2>Setup fijo — desglose completo</h2>
     <div class="chart-pct"><strong>__CLAUDIT_SETUP_TOTAL__</strong><span>tok/turno · piso fijo re-leido cada turno</span></div>
   </div>
-  <p class="muted">Cada fila es un componente del piso fijo (la barra "setup fijo" de arriba, abierta). % = componente / setup fijo. Palanca = tok/turno editables que ahorras si lo recortas: <span class="p-mark">***</span> &ge;1000 · <span class="p-mark">**</span> &ge;300 · <span class="p-mark">*</span> &lt;300 · <span class="p-none">—</span> base del harness, no editable. Los CLAUDE.md se leen del disco AHORA (reflejan el estado actual).</p>
+  <p class="muted">Cada fila es un componente del piso fijo (la barra "setup fijo" de arriba, abierta). % = componente / setup fijo. Palanca = tok/turno editables que ahorras si lo recortas: <span class="p-mark">***</span> &ge;1000 · <span class="p-mark">**</span> &ge;300 · <span class="p-mark">*</span> &lt;300 · <span class="p-none">—</span> base del harness, no editable. Los CLAUDE.md se miden desde el adjunto instructions del transcript (lo que se cargo en la sesion); sin adjunto, del disco (estimado).</p>
   <div class="chart-wrap">
     <table class="setup-tree">
       <thead><tr><th>Componente</th><th>tok/turno</th><th>% setup</th><th>palanca</th></tr></thead>

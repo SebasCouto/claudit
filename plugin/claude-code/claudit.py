@@ -657,6 +657,76 @@ def desglose_setup(lineas, filas, cpt_flag=None):
     return {"total": total, "componentes": comps, "ratio": ratio, "ratio_fuente": fuente}
 
 
+# ---------------------------------------------------------------------------
+# Vista /context: el contexto ACTUAL (ultima inferencia) por categoria, como el panel
+# /context de Claude Code. Las categorias fijas salen del desglose del setup; Messages
+# es el resto del contexto usado. La ventana se estima por modelo (o --ventana N).
+# ---------------------------------------------------------------------------
+AUTOCOMPACT_BUFFER = 33_000
+VENTANA_BASE, VENTANA_1M = 200_000, 1_000_000
+_CATS_FIJAS = ("sistema", "tools", "mcp_tools", "mcp", "agentes", "memoria", "skills")
+_NOMBRE_CAT_EXTRA = {"mensajes": "Messages", "buffer": "Autocompact buffer", "libre": "Free space"}
+
+
+def ventana_modelo(model):
+    """Ventana de contexto estimada: 1M para la familia 5 (opus/sonnet/fable) o ids
+    con [1m]; 200k para el resto. Es una estimacion: --ventana N la fija."""
+    m = (model or "").lower()
+    if "[1m]" in m or re.search(r"(opus|sonnet|fable)-5", m):
+        return VENTANA_1M
+    return VENTANA_BASE
+
+
+def modelo_actual(filas):
+    reales = [f.get("model") for f in filas if f.get("model") and f.get("model") != "<synthetic>"]
+    return reales[-1] if reales else None
+
+
+def vista_contexto(lineas, filas, setup, ventana_flag=None):
+    """Contexto de la ultima inferencia por categoria + listas de memoria y agentes."""
+    modelo = modelo_actual(filas)
+    ventana, fuente = (ventana_flag, "flag") if ventana_flag else (ventana_modelo(modelo), "estimada por modelo")
+    ult = filas[-1]
+    usado = ult["read"] + ult["write"] + ult["input"] + ult["output"]
+    fijo = {k: 0.0 for k in _CATS_FIJAS}
+    for c in setup["componentes"]:
+        if c["tipo"] in fijo:
+            fijo[c["tipo"]] += max(0.0, c["tok"])
+    cats = [{"clave": k, "nombre": CATEGORIAS[k][0], "tok": v} for k, v in fijo.items() if v >= 0.5]
+    mensajes = max(0.0, usado - sum(fijo.values()))
+    # Con la ventana casi llena el buffer se recorta a lo que queda: las categorias
+    # siempre cierran contra la ventana (igual que la barra de /context).
+    buffer = min(AUTOCOMPACT_BUFFER, max(0.0, ventana - usado))
+    libre = max(0.0, ventana - usado - buffer)
+    cats += [{"clave": k, "nombre": _NOMBRE_CAT_EXTRA[k], "tok": v}
+             for k, v in (("mensajes", mensajes), ("buffer", buffer), ("libre", libre))]
+    lista = lambda tipo, quitar="": sorted(
+        ({"label": c["label"][len(quitar):] if c["label"].startswith(quitar) else c["label"], "tok": c["tok"]}
+         for c in setup["componentes"] if c["tipo"] == tipo), key=lambda x: -x["tok"])
+    return {"modelo": modelo, "ventana": ventana, "ventana_fuente": fuente, "usado": usado,
+            "pct": 100 * usado / ventana if ventana else 0, "categorias": cats,
+            "memoria": lista("memoria"), "agentes": lista("agentes", "agente ")}
+
+
+def imprimir_contexto(v):
+    """Panel tipo /context en texto: barra, categorias y listas."""
+    ancho = 50
+    print(f"\nContexto actual (como /context) · {v['modelo'] or 'modelo desconocido'}")
+    print(f"  {tok(round(v['usado']))} / {tok(v['ventana'])} tok ({v['pct']:.0f}%) · ventana {v['ventana_fuente']}")
+    simbolos = {"buffer": "▒", "libre": "░"}
+    barra = ""
+    for c in v["categorias"]:
+        barra += simbolos.get(c["clave"], "█") * round(ancho * c["tok"] / v["ventana"])
+    print(f"  [{barra[:ancho].ljust(ancho, '░')}]")
+    for c in v["categorias"]:
+        print(f"  {c['nombre'].ljust(26)}{tok(round(c['tok'])).rjust(11)} tok {100 * c['tok'] / v['ventana']:5.1f}%")
+    for titulo, items in (("Memory files", v["memoria"]), ("Custom agents", v["agentes"])):
+        if items:
+            print(f"  {titulo}:")
+            for it in items:
+                print(f"    {it['label'][:58].ljust(58)}{tok(round(it['tok'])).rjust(9)}")
+
+
 _FUENTE_CPT = {"calibrado": "calibrado contra la 1a inferencia", "default": "default, sin api-request-shape",
                "flag": "fijado con --chars-por-token"}
 
@@ -960,7 +1030,40 @@ def _setup_tree_html(setup):
     return "\n".join(filas)
 
 
-def generar_html(jsonl, lineas, filas, destino, cpt_flag=None):
+def _contexto_html(v):
+    """Seccion tipo /context: barra apilada por categoria, tabla y listas de
+    memoria/agentes. Misma data que imprimir_contexto (vista_contexto)."""
+    ventana = v["ventana"] or 1
+
+    def pct(t):
+        return 100 * t / ventana
+
+    segs = "".join(
+        f'<span class="ctx-seg k-{c["clave"]}" style="width:{pct(c["tok"]):.3f}%" '
+        f'title="{_esc(c["nombre"])}: {_tok0(c["tok"])} tok ({pct(c["tok"]):.1f}%)"></span>'
+        for c in v["categorias"] if c["tok"] > 0)
+    filas = "".join(
+        f'<tr><td><span class="ctx-dot k-{c["clave"]}"></span>{_esc(c["nombre"])}</td>'
+        f'<td>{_tok0(c["tok"])}</td><td>{pct(c["tok"]):.1f}%</td></tr>'
+        for c in v["categorias"])
+    listas = ""
+    for titulo, items in (("Memory files", v["memoria"]), ("Custom agents", v["agentes"])):
+        if items:
+            lis = "".join(f'<li><span>{_esc(it["label"])}</span><code>{_tok0(it["tok"])}</code></li>'
+                          for it in items)
+            listas += f'<div class="ctx-list"><h3>{titulo}</h3><ul>{lis}</ul></div>'
+    return (
+        f'<p class="ctx-head"><strong>{_esc(v["modelo"] or "modelo desconocido")}</strong> · '
+        f'{_tok0(v["usado"])} / {_tok0(v["ventana"])} tokens ({v["pct"]:.0f}%) '
+        f'<span class="muted">· ventana {_esc(v["ventana_fuente"])}</span></p>'
+        f'<div class="ctx-bar" role="img" aria-label="Contexto usado {v["pct"]:.0f}%">{segs}</div>'
+        f'<div class="ctx-grid"><table class="setup-tree ctx-table"><thead><tr><th>Categoria</th>'
+        f'<th>tok</th><th>% ventana</th></tr></thead><tbody>{filas}</tbody></table>'
+        f'<div>{listas}</div></div>'
+    )
+
+
+def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None):
     """Arma el reporte HTML self-contained y lo escribe en `destino` (Path).
 
     Crea el dir padre si hace falta. Si el dir padre se llama '.claudit', le
@@ -996,6 +1099,7 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None):
     out = out.replace("__CLAUDIT_TIPS__", _tips_html(setup))
     out = out.replace("__CLAUDIT_SETUP_TOTAL__", _tok0(setup["total"]))
     out = out.replace("__CLAUDIT_SETUP_ROWS__", _setup_tree_html(setup))
+    out = out.replace("__CLAUDIT_CONTEXTO__", _contexto_html(vista_contexto(lineas, filas, setup, ventana_flag)))
     out = out.replace("__CLAUDIT_ARIA_COMP__", _esc(_aria_composicion(items_comp)))
     out = out.replace("__CLAUDIT_ARIA_WRITE__", _esc(_aria_write(items_write)))
     out = out.replace("__CLAUDIT_COMP_JSON__", json.dumps(items_comp, ensure_ascii=False))
@@ -1278,8 +1382,8 @@ def main():
     por_tipo = costo_por_tipo(filas)
     print("\nAcumulado en la sesion:")
     print(f"  cache-read : {tok(acum['read']).rjust(13)} tok   ~ {usd(por_tipo['read'])}")
-    imprimir_composicion(composicion_prefijo(lineas, filas),
-                         desglose_setup(lineas, filas, opciones["chars_por_token"]), acum["read"])
+    setup = desglose_setup(lineas, filas, opciones["chars_por_token"])
+    imprimir_composicion(composicion_prefijo(lineas, filas), setup, acum["read"])
     print(f"  cache-write: {tok(acum['write']).rjust(13)} tok   ~ {usd(por_tipo['write'])}  (TTL {_TTL_TXT[ttl_dominante(filas)]})")
     print(f"  input      : {tok(acum['input']).rjust(13)} tok   ~ {usd(por_tipo['input'])}")
     print(f"  output     : {tok(acum['output']).rjust(13)} tok   ~ {usd(por_tipo['output'])}")
@@ -1289,6 +1393,7 @@ def main():
     print("Cuanto mas se escribe en el hilo (archivos inline, prompts largos, sin")
     print("skills/distill/sub-agentes), mas grande el prefijo -> mas cache-read en")
     print("CADA turno siguiente. El cache-read acumulado es el proxy del gasto.")
+    imprimir_contexto(vista_contexto(lineas, filas, setup, opciones["ventana"]))
 
     if quiere_html:
         if html_ruta_arg:
@@ -1299,7 +1404,7 @@ def main():
             id_carpeta = jsonl.stem if posicionales else (sesion_actual() or jsonl).stem
             stamp = time.strftime("%Y-%m-%d_%H-%M-%S")   # cada report, su propio archivo con fecha+hora
             destino = carpeta_sesion(id_carpeta) / f"report-{stamp}.html"
-        generar_html(jsonl, lineas, filas, destino, opciones["chars_por_token"])
+        generar_html(jsonl, lineas, filas, destino, opciones["chars_por_token"], opciones["ventana"])
         print(f"Reporte HTML: {destino}")
 
 

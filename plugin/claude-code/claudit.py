@@ -955,6 +955,175 @@ def lineas_cupo(c):
     return out
 
 
+USO_MESES = 6
+_TOOLS_EDICION = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+_RE_COMANDO = re.compile(r"<command-name>/?([^<\s]+)</command-name>")
+# Comandos nativos de Claude Code: no son skills, no se cuentan como tales.
+_COMANDOS_NATIVOS = frozenset((
+    "add-dir agents bug clear compact config context cost doctor effort exit export fast help hooks ide "
+    "init login logout mcp memory model output-style permissions plugin plugins pr-comments privacy-settings "
+    "release-notes resume rewind status statusline terminal-setup theme todos upgrade usage vim").split())
+# Heuristica lectura/escritura de un conector MCP por los verbos del nombre de la tool.
+_VERBOS_LECTURA = frozenset("get list read search query fetch find context current stats view describe "
+                            "lookup timeline export guide".split())
+
+
+def _texto_resultado(b):
+    c = b.get("content")
+    return c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)
+
+
+def _rechazado(entry, b):
+    r = entry.get("toolUseResult")
+    return (isinstance(r, str) and "rejected" in r.lower()) or (
+        bool(b.get("is_error")) and "doesn't want to proceed" in _texto_resultado(b))
+
+
+def _lineas_aceptadas(r):
+    """'+' del structuredPatch de un Edit; en un Write de archivo nuevo, sus lineas."""
+    if not isinstance(r, dict):
+        return 0
+    patch = r.get("structuredPatch") or []
+    n = sum(1 for h in patch if isinstance(h, dict) for l in h.get("lines") or []
+            if isinstance(l, str) and l.startswith("+"))
+    if not patch and r.get("type") == "create" and isinstance(r.get("content"), str):
+        n = len(r["content"].splitlines())
+    return n
+
+
+def _fecha_local(ts):
+    t = _ts_epoch(ts)
+    return datetime.fromtimestamp(t).strftime("%Y-%m-%d") if t is not None else None
+
+
+def _mes_vacio():
+    return {"dias": {}, "skills": {}, "conectores": {}, "modelos": {}, "aceptadas": 0, "rechazadas": 0}
+
+
+def _dia_vacio():
+    return {"sesiones": set(), "prompts": 0, "lineas": 0, "tools": 0, "inferencias": 0, "tokens": 0, "costo": 0.0}
+
+
+def _acumular_uso(meses, lineas, sesion, sidechain):
+    """Suma un transcript a `meses` (mes -> acumulador). Los prompts de sub-agentes
+    no son prompts humanos: sus tools, lineas y tokens si cuentan (trabajo delegado)."""
+    def dia(fecha):
+        m = meses.setdefault(fecha[:7], _mes_vacio())
+        return m, m["dias"].setdefault(fecha, _dia_vacio())
+
+    for f in leer_inferencias(lineas):
+        fecha = _fecha_local(f["ts"])
+        if not fecha:
+            continue
+        m, d = dia(fecha)
+        d["inferencias"] += 1
+        d["tokens"] += f["read"] + f["write"] + f["input"] + f["output"]
+        d["costo"] += costo(f)
+        d["sesiones"].add(sesion)
+        if f.get("model") and f["model"] != "<synthetic>":
+            m["modelos"][f["model"]] = m["modelos"].get(f["model"], 0) + 1
+    nombres = {}
+    for e in lineas:
+        fecha = _fecha_local(e.get("timestamp")) if isinstance(e, dict) else None
+        if not fecha:
+            continue
+        m, d = dia(fecha)
+        if es_prompt(e) and not sidechain:
+            d["prompts"] += 1
+            d["sesiones"].add(sesion)
+            c = (e.get("message") or {}).get("content")
+            for cmd in _RE_COMANDO.findall(c if isinstance(c, str) else ""):
+                if cmd not in _COMANDOS_NATIVOS:
+                    m["skills"][cmd] = m["skills"].get(cmd, 0) + 1
+        for b in blocks_de(e):
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use" and e.get("type") == "assistant":
+                nombre = b.get("name") or "?"
+                if b.get("id") in nombres:
+                    continue  # misma respuesta repetida en otra linea
+                nombres[b.get("id")] = nombre
+                d["tools"] += 1
+                if nombre == "Skill" and isinstance(b.get("input"), dict) and b["input"].get("skill"):
+                    s = b["input"]["skill"]
+                    m["skills"][s] = m["skills"].get(s, 0) + 1
+                elif nombre.startswith("mcp__") and nombre.count("__") >= 2:
+                    _, srv, tool_ = nombre.split("__", 2)
+                    c = m["conectores"].setdefault(srv, {"lecturas": 0, "escrituras": 0})
+                    lectura = _VERBOS_LECTURA & set(re.split(r"[_\-]", tool_.lower()))
+                    c["lecturas" if lectura else "escrituras"] += 1
+            elif b.get("type") == "tool_result" and nombres.get(b.get("tool_use_id")) in _TOOLS_EDICION:
+                if _rechazado(e, b):
+                    m["rechazadas"] += 1
+                elif isinstance(e.get("toolUseResult"), dict):
+                    m["aceptadas"] += 1
+                    d["lineas"] += _lineas_aceptadas(e["toolUseResult"])
+
+
+def _cerrar_mes(mes, m, hoy):
+    """Acumulador de un mes -> dict serializable con un dia por fecha calendario."""
+    anio, num = int(mes[:4]), int(mes[5:])
+    sig = datetime(anio + num // 12, num % 12 + 1, 1)
+    n_dias = (sig - datetime(anio, num, 1)).days
+    dias = []
+    for i in range(1, n_dias + 1):
+        fecha = f"{mes}-{i:02d}"
+        d = m["dias"].get(fecha, _dia_vacio())
+        dias.append({"fecha": fecha, "sesiones": len(d["sesiones"]), "prompts": d["prompts"],
+                     "lineas": d["lineas"], "tools": d["tools"], "inferencias": d["inferencias"],
+                     "tokens": d["tokens"], "costo": round(d["costo"], 4)})
+    transcurridos = n_dias if hoy[:7] > mes else int(hoy[8:10]) if hoy[:7] == mes else 0
+    activos = [d for d in dias if d["sesiones"]]
+    ult7 = [d for d in dias if d["sesiones"] and d["fecha"] <= hoy and
+            (datetime.strptime(hoy, "%Y-%m-%d") - datetime.strptime(d["fecha"], "%Y-%m-%d")).days < 7]
+    suma = {k: sum(d[k] for d in dias) for k in ("lineas", "prompts", "tools", "inferencias", "tokens", "costo")}
+    decididas = m["aceptadas"] + m["rechazadas"]
+    sesiones = set().union(*(d["sesiones"] for d in m["dias"].values())) if m["dias"] else set()
+    return {"mes": mes, "dias": dias,
+            "totales": dict(suma, costo=round(suma["costo"], 4), sesiones=len(sesiones),
+                            aceptadas=m["aceptadas"], rechazadas=m["rechazadas"],
+                            accept_rate=m["aceptadas"] / decididas if decididas else None,
+                            acciones_por_prompt=suma["tools"] / suma["prompts"] if suma["prompts"] else None,
+                            dias_activos=len(activos), dias_activos_7d=len(ult7),
+                            dias_transcurridos=transcurridos,
+                            adherencia=len(activos) / transcurridos if transcurridos else None),
+            "skills": sorted(m["skills"].items(), key=lambda x: (-x[1], x[0])),
+            "conectores": sorted(({"servidor": s, **v} for s, v in m["conectores"].items()),
+                                 key=lambda x: -(x["lecturas"] + x["escrituras"])),
+            "modelos": sorted(m["modelos"].items(), key=lambda x: -x[1])}
+
+
+def metricas_uso(raiz=None, ahora=None, meses=USO_MESES):
+    """Metricas de uso por dia y mes de TODAS las sesiones locales (todos los proyectos,
+    sub-agentes incluidos), al estilo del dashboard de Claude pero de un solo usuario.
+    Todo sale del transcript local: lineas aceptadas, accept rate, tools por prompt,
+    skills, conectores MCP, dias activos y costo estimado."""
+    raiz = raiz or HOME / ".claude" / "projects"
+    ahora = ahora if ahora is not None else time.time()
+    hoy = datetime.fromtimestamp(ahora)
+    a, mm = hoy.year, hoy.month - (meses - 1)
+    while mm < 1:
+        a, mm = a - 1, mm + 12
+    desde = f"{a:04d}-{mm:02d}"
+    corte = datetime(a, mm, 1).timestamp()
+    acc = {}
+    for jsonl in (raiz.rglob("*.jsonl") if raiz.is_dir() else []):
+        try:
+            if jsonl.stat().st_mtime < corte:
+                continue
+            lineas = parsear_lineas(jsonl)
+        except OSError:
+            continue
+        rel = jsonl.relative_to(raiz).parts
+        _acumular_uso(acc, lineas, (rel[0], rel[1].split(".")[0]), sidechain=len(rel) > 2)
+    hoy_s = hoy.strftime("%Y-%m-%d")
+    claves = sorted(k for k in acc if desde <= k <= hoy_s[:7])
+    if claves and hoy_s[:7] not in claves:
+        claves.append(hoy_s[:7])
+    return {"meses": [_cerrar_mes(k, acc.get(k, _mes_vacio()), hoy_s) for k in claves],
+            "hoy": hoy_s, "fuente": "observed"}
+
+
 def modelo_actual(filas):
     reales = [f.get("model") for f in filas if f.get("model") and f.get("model") != "<synthetic>"]
     return reales[-1] if reales else None

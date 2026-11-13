@@ -733,6 +733,42 @@ def imprimir_alerta_ventana(a):
         print(f"    {linea}")
 
 
+_TTL_S = {"5m": 300, "1h": 3600}
+_RECO_RETOMADA = ("/compact antes de la pausa, o sesion nueva si los pendientes "
+                  "estan en Engram/HANDOFF")
+
+
+def retomadas_cache_vencida(filas):
+    """Huecos entre inferencias > TTL dominante seguidos de un write >= 50% del
+    contexto: la cache vencio y el prefijo entero se re-escribio (mejora 9)."""
+    ttl = _TTL_S[ttl_dominante(filas)]
+    eventos = []
+    for i in range(1, len(filas)):
+        t0, t1 = _ts_epoch(filas[i - 1]["ts"]), _ts_epoch(filas[i]["ts"])
+        f = filas[i]
+        ctx = f["read"] + f["write"] + f["input"]
+        if t0 is None or t1 is None or t1 - t0 <= ttl or not ctx or f["write"] < 0.5 * ctx:
+            continue
+        eventos.append({"indice": i, "hora": _hora_local(f["ts"]), "hueco_s": t1 - t0,
+                        "rewrite": f["write"], "costo": costo_partes(f)["write"]})
+    return eventos
+
+
+def _duracion(seg):
+    m = int(seg // 60)
+    return f"{m // 60} h {m % 60:02d} min" if m >= 60 else f"{m} min"
+
+
+def imprimir_retomadas(eventos):
+    if not eventos:
+        return
+    print("\nSesion retomada con cache vencida:")
+    for ev in eventos:
+        print(f"  {ev['hora']} · pausa {_duracion(ev['hueco_s'])} · re-write {tok(ev['rewrite'])} tok"
+              f" ~ {usd(ev['costo'])}")
+    print(f"  Recomendacion: {_RECO_RETOMADA}.")
+
+
 def modelo_actual(filas):
     reales = [f.get("model") for f in filas if f.get("model") and f.get("model") != "<synthetic>"]
     return reales[-1] if reales else None
@@ -1159,6 +1195,16 @@ def _curva_contexto_html(a):
             f'<p class="muted">{len(ctx)} inferencias · maximo {_tok0(a["max"])} tok</p>')
 
 
+def _retomadas_html(eventos):
+    if not eventos:
+        return ""
+    lis = "".join(f'<li><span>{_esc(ev["hora"])} · pausa {_duracion(ev["hueco_s"])} · re-write '
+                  f'{_tok0(ev["rewrite"])} tok</span><code>{_esc(usd(ev["costo"]))}</code></li>'
+                  for ev in eventos)
+    return (f'<div class="ctx-list"><h3>Retomada con cache vencida</h3><ul>{lis}</ul>'
+            f'<p class="muted">Recomendacion: {_esc(_RECO_RETOMADA)}.</p></div>')
+
+
 def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None):
     """Arma el reporte HTML self-contained y lo escribe en `destino` (Path).
 
@@ -1196,7 +1242,8 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     out = out.replace("__CLAUDIT_SETUP_TOTAL__", _tok0(setup["total"]))
     out = out.replace("__CLAUDIT_SETUP_ROWS__", _setup_tree_html(setup))
     out = out.replace("__CLAUDIT_CONTEXTO__", _contexto_html(vista_contexto(lineas, filas, setup, ventana_flag)))
-    out = out.replace("__CLAUDIT_CURVA__", _curva_contexto_html(analisis_ventana(filas)))
+    out = out.replace("__CLAUDIT_CURVA__", _curva_contexto_html(analisis_ventana(filas))
+                      + _retomadas_html(retomadas_cache_vencida(filas)))
     out = out.replace("__CLAUDIT_ARIA_COMP__", _esc(_aria_composicion(items_comp)))
     out = out.replace("__CLAUDIT_ARIA_WRITE__", _esc(_aria_write(items_write)))
     out = out.replace("__CLAUDIT_COMP_JSON__", json.dumps(items_comp, ensure_ascii=False))
@@ -1492,6 +1539,7 @@ def main():
     print("CADA turno siguiente. El cache-read acumulado es el proxy del gasto.")
     imprimir_contexto(vista_contexto(lineas, filas, setup, opciones["ventana"]))
     imprimir_alerta_ventana(analisis_ventana(filas))
+    imprimir_retomadas(retomadas_cache_vencida(filas))
 
     if quiere_html:
         if html_ruta_arg:

@@ -1127,12 +1127,14 @@ def _cerrar_mes(mes, m, hoy):
             "modelos": sorted(m["modelos"].items(), key=lambda x: -x[1])}
 
 
-def metricas_uso(raiz=None, ahora=None, meses=USO_MESES):
+def metricas_uso(raiz=None, ahora=None, meses=USO_MESES, proyecto=None):
     """Metricas de uso por dia y mes de TODAS las sesiones locales (todos los proyectos,
     sub-agentes incluidos), al estilo del dashboard de Claude pero de un solo usuario.
     Todo sale del transcript local: lineas aceptadas, accept rate, tools por prompt,
-    skills, conectores MCP, dias activos y costo estimado."""
+    skills, conectores MCP, dias activos y costo estimado. Con `proyecto` (carpeta bajo
+    ~/.claude/projects) mide solo las sesiones de ese proyecto."""
     raiz = raiz or HOME / ".claude" / "projects"
+    base = raiz / proyecto if proyecto else raiz
     ahora = ahora if ahora is not None else time.time()
     hoy = datetime.fromtimestamp(ahora)
     a, mm = hoy.year, hoy.month - (meses - 1)
@@ -1141,7 +1143,7 @@ def metricas_uso(raiz=None, ahora=None, meses=USO_MESES):
     desde = f"{a:04d}-{mm:02d}"
     corte = datetime(a, mm, 1).timestamp()
     acc = {}
-    for jsonl in (raiz.rglob("*.jsonl") if raiz.is_dir() else []):
+    for jsonl in (base.rglob("*.jsonl") if base.is_dir() else []):
         try:
             if jsonl.stat().st_mtime < corte:
                 continue
@@ -1656,13 +1658,20 @@ def _cupo_html(c):
             f'<th>procedencia</th></tr></thead><tbody>{trs}</tbody></table>')
 
 
-def _uso_html(u):
+def _uso_html(u, up=None, nombre=None):
     """Contenedores de la pestaña Uso + los meses como JSON; el JS del template dibuja
-    el mes elegido con el paginador ‹ ›."""
+    el mes elegido con el paginador ‹ › y cambia de ambito (todos los proyectos / este
+    proyecto) con el selector, sin recalcular: los dos ambitos van embebidos."""
     if not u["meses"]:
         return f'<p class="muted">Sin sesiones locales en los ultimos {USO_MESES} meses.</p>'
-    datos = json.dumps(u, ensure_ascii=False).replace("</", "<\\/")
-    return ('<div class="uso-pager"><button class="btn uso-prev" type="button" aria-label="Mes anterior">‹</button>'
+    up = up or {"meses": []}
+    datos = json.dumps({"todos": u, "proyecto": up, "nombre": nombre or ""},
+                       ensure_ascii=False).replace("</", "<\\/")
+    selector = ('<label class="uso-ambito">Ambito <select id="uso-ambito">'
+                '<option value="todos">Todos los proyectos</option>'
+                f'<option value="proyecto"{"" if up["meses"] else " disabled"}>'
+                f'Este proyecto · {_esc(nombre)}</option></select></label>' if nombre else "")
+    return (f'<div class="uso-pager">{selector}<button class="btn uso-prev" type="button" aria-label="Mes anterior">‹</button>'
             '<strong id="uso-mes" aria-live="polite"></strong>'
             '<button class="btn uso-next" type="button" aria-label="Mes siguiente">›</button></div>'
             '<div class="metric-boxes" id="uso-kpis"></div>'
@@ -1711,7 +1720,9 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     out = out.replace("__CLAUDIT_SETUP_ROWS__", _setup_tree_html(setup))
     out = out.replace("__CLAUDIT_CONTEXTO__", _contexto_html(vista_contexto(lineas, filas, setup, ventana_flag)))
     out = out.replace("__CLAUDIT_CUPO__", _cupo_html(consumo_local()))
-    out = out.replace("__CLAUDIT_USO__", _uso_html(metricas_uso()))
+    proy = jsonl.parent.name
+    nombre = REPO.name if jsonl.parent == dir_proyecto() else proy
+    out = out.replace("__CLAUDIT_USO__", _uso_html(metricas_uso(), metricas_uso(proyecto=proy), nombre))
     out = out.replace("__CLAUDIT_HOOKS__", _salud_hooks_html(*hooks_con_previa(jsonl, lineas))
                       + f'<p class="muted">{_esc(linea_primer_turno(turnos(lineas)))}</p>')
     out = out.replace("__CLAUDIT_CURVA__", _curva_contexto_html(analisis_ventana(filas))

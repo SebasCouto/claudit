@@ -110,6 +110,8 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .tab:hover{color:var(--ink);} .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--primary);}
 .tab:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:6px;}
 .uso-pager{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin:4px 0 6px;}
+.uso-ambito{margin-right:auto;color:var(--muted);font-size:13px;}
+.uso-ambito select{margin-left:8px;background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:5px 12px;font:600 13px var(--font-sans);}
 .uso-pager strong{min-width:150px;text-align:center;font-size:15px;}
 .uso-chart .setup-tree{min-width:0;}
 .uso-pager .btn{padding:4px 12px;font-size:16px;} .uso-pager .btn:disabled{opacity:.35;cursor:default;}
@@ -239,9 +241,9 @@ __CLAUDIT_CUPO__
 
 <section class="card">
   <div class="chart-head">
-    <h2>Uso por mes — todas las sesiones locales</h2>
+    <h2>Uso por mes</h2>
   </div>
-  <p class="muted">Metricas estilo dashboard de Claude, pero de un solo usuario y calculadas del transcript local de TODOS los proyectos (sub-agentes incluidos). Lineas aceptadas = lineas agregadas por Edit/Write aplicados; accept rate = ediciones aplicadas / (aplicadas + rechazadas); acciones por prompt = tool calls / prompts humanos; adherencia = dias activos / dias transcurridos del mes. Costo estimado por precio de modelo.</p>
+  <p class="muted">Metricas estilo dashboard de Claude, pero de un solo usuario y calculadas del transcript local (sub-agentes incluidos). El selector de ambito cambia entre TODOS los proyectos y solo este proyecto (esta sesion incluida). Lineas aceptadas = lineas agregadas por Edit/Write aplicados; accept rate = ediciones aplicadas / (aplicadas + rechazadas); acciones por prompt = tool calls / prompts humanos; adherencia = dias activos / dias transcurridos del mes. Costo estimado por precio de modelo.</p>
 __CLAUDIT_USO__
 </section>
 </div>
@@ -402,8 +404,13 @@ function claudinUsoTabla(titulo, cols, filas){
 
 function claudinUso(){
   var el=document.getElementById('claudit-data-uso'); if(!el) return;
-  var u; try{u=JSON.parse(el.textContent);}catch(e){return;}
-  var idx=u.meses.length-1, prev=document.querySelector('.uso-prev'), next=document.querySelector('.uso-next');
+  var D; try{D=JSON.parse(el.textContent);}catch(e){return;}
+  var u=D.todos, idx=u.meses.length-1, prev=document.querySelector('.uso-prev'), next=document.querySelector('.uso-next');
+  var sel=document.getElementById('uso-ambito');
+  if(sel) sel.addEventListener('change',function(){
+    var mes=u.meses[idx].mes, nu=D[sel.value]; if(!nu||!nu.meses.length) return;
+    u=nu; var j=u.meses.map(function(m){return m.mes;}).indexOf(mes); idx=j>=0?j:u.meses.length-1; pintar();
+  });
   function pct(x){return x==null?'—':(x*100).toFixed(1)+'%';}
   function pintar(){
     var m=u.meses[idx], t=m.totales, p=m.mes.split('-');

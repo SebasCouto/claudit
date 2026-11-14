@@ -1,4 +1,5 @@
 """Pestaña Uso: metricas por dia/mes de TODAS las sesiones locales (estilo dashboard Claude)."""
+import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -115,6 +116,38 @@ class TestMetricasUso(unittest.TestCase):
         self.assertIn('id="claudit-data-uso"', html)
         self.assertIn("uso-prev", html)
         self.assertIn("2026-11", html)
+
+
+class TestUsoPorProyecto(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.raiz = Path(cls.tmp.name)
+        for nombre, lineas in (("-p-a", SESION_A), ("-p-b", SESION_B), ("-p-c", SESION_VIEJA)):
+            (cls.raiz / nombre).mkdir()
+            fx.escribir(cls.raiz / nombre, lineas, "s.jsonl")
+        cls.u = claudit.metricas_uso(raiz=cls.raiz, ahora=AHORA, proyecto="-p-a")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_solo_cuenta_el_proyecto_pedido(self):
+        self.assertEqual([m["mes"] for m in self.u["meses"]], ["2026-11"])
+        nov = self.u["meses"][0]
+        self.assertEqual(nov["totales"]["sesiones"], 1)
+        self.assertEqual(dict(nov["modelos"]), {"claude-opus-5-5": 4})
+
+    def test_proyecto_inexistente_sin_meses(self):
+        self.assertEqual(claudit.metricas_uso(raiz=self.raiz, ahora=AHORA, proyecto="-nope")["meses"], [])
+
+    def test_html_trae_ambos_ambitos_y_selector(self):
+        todos = claudit.metricas_uso(raiz=self.raiz, ahora=AHORA)
+        html = claudit._uso_html(todos, self.u, "-p-a")
+        self.assertIn('id="uso-ambito"', html)
+        datos = json.loads(html.split('id="claudit-data-uso">')[1].split("</script>")[0])
+        self.assertEqual(set(datos), {"todos", "proyecto", "nombre"})
+        self.assertEqual(datos["nombre"], "-p-a")
 
 
 if __name__ == "__main__":

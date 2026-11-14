@@ -656,19 +656,26 @@ def secciones_texto(txt, cpt=CHARS_POR_TOKEN):
         h = partes[i].strip()
         cuerpo = partes[i + 1] if i + 1 < len(partes) else ""
         tramos.append((h.lstrip("#").strip(), len(h) + len(cuerpo)))
-    return [(t, ch / cpt) for t, ch in tramos]
+    fusion = {}  # mismo header repetido (p. ej. un hook que inyecta 2 veces) = una fila con el total
+    for t, ch in tramos:
+        fusion[t] = fusion.get(t, 0) + ch
+    return [(t, ch / cpt) for t, ch in fusion.items()]
 
 
-def secciones_skills(txt, cpt=CHARS_POR_TOKEN, top=None):
-    """Corta el skill_listing ('- nombre: descripcion' por skill) en [(nombre, tokens)]:
-    las `top` mas pesadas una por una y el resto agregado al final."""
-    top = SKILLS_TOP if top is None else top
+def todas_skills(txt, cpt=CHARS_POR_TOKEN):
+    """Cada skill del skill_listing ('- nombre: descripcion') como (nombre, tokens), en orden alfabetico."""
     items = []
     for parte in re.split(r"(?m)^(?=- )", txt):
         if parte.strip():
             nombre = parte[2:].split(": ", 1)[0].strip() if parte.startswith("- ") else "(preambulo)"
             items.append((nombre, len(parte) / cpt))
-    items.sort(key=lambda x: -x[1])
+    return sorted(items, key=lambda x: x[0].casefold())
+
+
+def secciones_skills(txt, cpt=CHARS_POR_TOKEN, top=None):
+    """Las `top` skills mas pesadas una por una y el resto agregado al final."""
+    top = SKILLS_TOP if top is None else top
+    items = sorted(todas_skills(txt, cpt), key=lambda x: -x[1])
     if len(items) > top:
         resto = items[top:]
         items = items[:top] + [(f"resto ({len(resto)} skills)", sum(k for _, k in resto))]
@@ -691,6 +698,44 @@ def secciones_top(secc):
     if chicas:
         grandes.append((f"resto ({len(chicas)} secciones menores)", sum(k for _, k in chicas)))
     return sorted(grandes, key=lambda x: -x[1])
+
+
+# Conceptos para agrupar secciones en Prioridad de mejora. Vocabulario GENERICO y
+# bilingue (no los titulos de un setup puntual): matchea por subcadena en el titulo,
+# gana el primer concepto. Heuristica: lo que no matchea queda suelto, nunca se pierde.
+CONCEPTOS = [
+    ("SDD", ("sdd", "spec-driven", "openspec")),
+    ("Memoria persistente", ("memori", "memory", "engram", "recall", "recordar")),
+    ("Agentes y modelos", ("agent", "orquest", "orchestr", "model", "delegat", "sub-agente")),
+    ("Skills", ("skill",)),
+    ("Sesión y contexto", ("sesión", "sesion", "session", "context", "compact")),
+    ("Estilo y tono", ("tone", "tono", "personality", "personalidad", "language", "idioma",
+                       "style", "estilo", "speech")),
+]
+
+
+def _concepto(titulo):
+    t = titulo.casefold()
+    return next((n for n, claves in CONCEPTOS if any(c in t for c in claves)), None)
+
+
+def agrupar_conceptos(secc):
+    """[{titulo, tok, hijos}] por peso desc: un nodo por concepto con 2+ secciones;
+    el resto suelto, y las sueltas < SECC_MINIMA juntas en 'resto'. Total conservado."""
+    grupos = {}
+    for t, k in secc:
+        grupos.setdefault(_concepto(t) or ("", t), []).append((t, k))
+    nodos, chicas = [], []
+    for clave, hijos in grupos.items():
+        if isinstance(clave, str) and len(hijos) > 1:
+            nodos.append({"titulo": clave, "tok": sum(k for _, k in hijos),
+                          "hijos": sorted(hijos, key=lambda x: -x[1])})
+            continue
+        for t, k in hijos:
+            (nodos.append({"titulo": t, "tok": k, "hijos": []}) if k >= SECC_MINIMA else chicas.append(k))
+    if chicas:
+        nodos.append({"titulo": f"resto ({len(chicas)} secciones menores)", "tok": sum(chicas), "hijos": []})
+    return sorted(nodos, key=lambda n: -n["tok"])
 
 
 def palanca(tok_val, editable):
@@ -852,25 +897,27 @@ def desglose_setup(lineas, filas, cpt_flag=None):
 
     comps = []
 
-    def comp(tipo, label, tk, secc=None, estimado=False):
+    def comp(tipo, label, tk, secc=None, estimado=False, crudas=None):
+        # secc = vista compacta (top + resto) del arbol; crudas = todas las secciones, para los tips.
         comps.append({"label": label, "tok": tk, "editable": CATEGORIAS[tipo][1], "secc": secc,
-                      "tipo": tipo, "estimado": estimado})
+                      "tipo": tipo, "estimado": estimado, "crudas": crudas})
 
     for path, (tipo, txt) in memoria.items():
         secc = secciones_texto(txt, ratio)
-        comp("memoria", f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc), secciones_top(secc))
+        comp("memoria", f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc), secciones_top(secc), crudas=secc)
     for tipo, path, txt in disco:
         secc = secciones_texto(txt, ratio)
         comp("memoria", f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc),
-             secciones_top(secc), estimado=True)
+             secciones_top(secc), estimado=True, crudas=secc)
     for (tipo, label), (n, est) in acum.items():
         txt = textos.get((tipo, label))
-        secc = None
+        secc = crudas = None
         if txt and tipo == "hook":
             secc = secc_hook(txt, ratio)
+            crudas = secciones_texto(txt, ratio) if secc else None
         elif txt and tipo == "skills":
-            secc = secciones_skills(txt, ratio)
-        comp(tipo, label, ch(n), secc, estimado=est)
+            secc, crudas = secciones_skills(txt, ratio), todas_skills(txt, ratio)
+        comp(tipo, label, ch(n), secc, estimado=est, crudas=crudas)
 
     medido = sum(c["tok"] for c in comps)
     resto = total - medido
@@ -1595,6 +1642,36 @@ def _loop_html(m):
     return html
 
 
+SKILLS_POR_PAGINA = 12
+
+
+def _tip_sub(c):
+    """Sub-desglose de un tip: skills completas y paginadas (A-Z); secciones agrupadas por concepto."""
+    fila = lambda t, k, cls="": (f'<li{cls}><span>{_esc(t)}</span><code>{_tok0(k)} tok</code></li>')
+    crudas = c.get("crudas")
+    if c.get("tipo") == "skills" and crudas:
+        items = "".join(f'<li data-pag="{i // SKILLS_POR_PAGINA + 1}"><span>{_esc(t)}</span>'
+                        f'<code>{_tok0(k)} tok</code></li>' for i, (t, k) in enumerate(crudas))
+        paginas = -(-len(crudas) // SKILLS_POR_PAGINA)
+        nav = ("" if paginas < 2 else
+               f'<li class="tip-pag" data-paginas="{paginas}">'
+               '<button type="button" data-dir="-1" aria-label="Pagina anterior">&lsaquo;</button>'
+               f'<span aria-live="polite">1 / {paginas}</span>'
+               '<button type="button" data-dir="1" aria-label="Pagina siguiente">&rsaquo;</button>'
+               f'<span class="muted">{len(crudas)} skills · A–Z</span></li>')
+        return items + nav
+    if crudas:
+        out = []
+        for n in agrupar_conceptos(crudas):
+            if n["hijos"]:
+                out.append(fila(n["titulo"], n["tok"], ' class="tip-grupo"'))
+                out += [fila(t, k, ' class="tip-hijo"') for t, k in n["hijos"]]
+            else:
+                out.append(fila(n["titulo"], n["tok"]))
+        return "".join(out)
+    return "".join(fila(t, k) for t, k in c.get("secc") or [])
+
+
 def _tips_html(setup):
     """Top componentes editables del setup fijo, ordenados por tok/turno desc."""
     editables = sorted([c for c in setup["componentes"] if c["editable"]], key=lambda c: -c["tok"])[:5]
@@ -1604,7 +1681,7 @@ def _tips_html(setup):
     for c in editables:
         marca = palanca(c["tok"], True)
         marca_html = f'<span class="tip-marca">{_esc(marca)}</span>' if marca else '<span class="tip-marca muted">—</span>'
-        sub = "".join(f'<li><span>{_esc(t)}</span><code>{_tok0(k)} tok</code></li>' for t, k in c.get("secc") or [])
+        sub = _tip_sub(c)
         filas.append(
             f'<li>{marca_html} <strong>{_esc(c["label"])}</strong> '
             f'<span class="muted">— {_tok0(c["tok"])} tok/turno</span>'

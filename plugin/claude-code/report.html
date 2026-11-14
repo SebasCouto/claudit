@@ -56,6 +56,13 @@ canvas{width:100%;display:block;}
 .tips-list .tip-sub{list-style:none;margin:8px 0 0 36px;padding:0;display:grid;gap:3px;}
 .tips-list .tip-sub li{display:flex;justify-content:space-between;gap:12px;border:none;padding:0;font-size:13px;color:var(--muted);}
 .tip-sub code{font-family:var(--font-mono);white-space:nowrap;}
+.tips-list .tip-sub li[hidden]{display:none;}
+.tips-list .tip-sub li.tip-grupo{color:var(--ink);font-weight:600;margin-top:6px;}
+.tips-list .tip-sub li.tip-hijo{padding-left:16px;font-size:12.5px;}
+.tips-list .tip-sub li.tip-pag{justify-content:flex-start;align-items:center;gap:8px;margin-top:8px;}
+.tip-pag button{min-width:30px;height:28px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);color:var(--ink);cursor:pointer;font-size:16px;line-height:1;}
+.tip-pag button:disabled{opacity:.4;cursor:default;}
+.tip-pag button:focus-visible{outline:2px solid var(--primary);outline-offset:2px;}
 .tip-marca{display:inline-block;min-width:28px;color:var(--bad);font-weight:700;font-family:var(--font-mono);}
 details{border:1px solid var(--line);background:var(--surface-1);border-radius:var(--radius);padding:18px 24px;margin-top:20px;}
 summary{cursor:pointer;font-weight:600;}
@@ -607,6 +614,18 @@ claudinDrawAll();
 claudinWireMetrics();
 claudinUso();
 claudinNav();
+(function claudinTipPag(){
+  document.querySelectorAll('.tip-pag').forEach(function(nav){
+    var lista=nav.parentNode, total=+nav.dataset.paginas, pag=1;
+    var items=lista.querySelectorAll('li[data-pag]'), btns=nav.querySelectorAll('button'), lbl=nav.querySelector('[aria-live]');
+    function ver(){
+      items.forEach(function(li){li.hidden=+li.dataset.pag!==pag;});
+      lbl.textContent=pag+' / '+total; btns[0].disabled=pag===1; btns[1].disabled=pag===total;
+    }
+    btns.forEach(function(b){b.addEventListener('click',function(){pag=Math.min(total,Math.max(1,pag+(+b.dataset.dir)));ver();});});
+    ver();
+  });
+})();
 </script>
 </body>
 </html>

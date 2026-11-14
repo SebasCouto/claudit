@@ -8,6 +8,37 @@ del plugin vive en `plugin/claude-code/.claude-plugin/plugin.json` y se espeja e
 `.claude-plugin/marketplace.json`; un GitHub Action la incrementa automáticamente
 (ver **Versionado** en el README).
 
+## [1.5.0] - 2026-11-13
+
+### Added
+
+- Reporte HTML en **pestañas** (Sesión / Contexto / Uso) dentro del mismo archivo;
+  la pestaña activa queda en el hash de la URL (`#uso`) y se navega con flechas.
+- **Contexto actual — como /context**: barra y tabla por categoría (system, tools,
+  MCP, agentes, memoria, skills, mensajes, autocompact buffer, libre) de la última
+  inferencia. La ventana se estima por modelo; `--ventana N` la fija.
+- **Contexto por inferencia**: curva con el umbral de auto-compact y alerta cuando
+  una ventana de 1M corre sin `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (con el fix listo).
+- **Sesión retomada con caché vencida**: hueco mayor al TTL seguido de un re-write
+  grande, con su costo.
+- **Salud de hooks del arranque**: chars inyectados, degradado (stderr, exitCode,
+  warning/error) y caída > 80% frente a la sesión previa.
+- Inferencias y tools del **primer turno**; **modelo y effort** en el encabezado.
+- **Cupo — consumo local** de las últimas 5 h sumando todos los proyectos, con
+  procedencia por campo (`observed` / `calculated` / `estimated` / `unknown`). El cupo
+  de la cuenta queda `unknown`: no se consultan endpoints privados ni credenciales.
+- **Pestaña Uso** con paginación por mes (‹ ›) sobre todas las sesiones locales de los
+  últimos 6 meses: líneas aceptadas, accept rate, acciones por prompt, días activos y
+  adherencia, sesiones, costo estimado, gráficos por día, skills, conectores MCP
+  (lecturas / escrituras) y modelos.
+
+### Fixed
+
+- Cada inferencia se cuenta **una sola vez por `message.id`**. Claude Code escribe una
+  línea por bloque de la misma respuesta (thinking, text, tool_use) repitiendo el mismo
+  `usage`; las versiones previas sumaban cada línea e **inflaban los totales** (cache-read,
+  costo, inferencias) del orden de 2x.
+
 ## [1.2.0] - 2026-07-20
 
 ### Added

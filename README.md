@@ -65,6 +65,18 @@ por expiración del TTL, o al entrar contenido nuevo grande).
 
 ![Cache-write por inferencia](assets/funnel-cache-write.png)
 
+**Pestañas.** El reporte se organiza en tres pestañas dentro del mismo HTML:
+
+- **Sesión** — salud de hooks del arranque, composición del cache-read, setup fijo,
+  cache-write por inferencia y prioridad de mejora.
+- **Contexto** — vista estilo `/context` (categorías, autocompact buffer y espacio
+  libre) y la curva de contexto por inferencia con el umbral de auto-compact. La
+  ventana se estima por modelo; `--ventana N` la fija a mano.
+- **Uso** — consumo local de las últimas 5 h y métricas por mes (‹ mes ›) de todas
+  las sesiones locales: líneas aceptadas, accept rate, acciones por prompt, días
+  activos, costo estimado, skills, conectores MCP y modelos. Todo sale del
+  transcript local; nada se consulta a la cuenta.
+
 ### Generación automática al iniciar la sesión
 
 Al **iniciar** cada sesión, un hook `SessionStart` ejecuta `claudit --html` y deja el
@@ -200,6 +212,7 @@ se quiera auditar:
 python3 plugin/claude-code/claudit.py             # sesión más reciente del cwd
 python3 plugin/claude-code/claudit.py --detalle
 python3 plugin/claude-code/claudit.py <uuid|archivo.jsonl>   # una sesión puntual
+python3 plugin/claude-code/claudit.py --html --ventana 200000  # fija la ventana de contexto
 ```
 
 ## Alcance

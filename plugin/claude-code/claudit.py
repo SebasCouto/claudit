@@ -1121,6 +1121,32 @@ _VERBOS_LECTURA = frozenset("get list read search query fetch find context curre
                             "lookup timeline export guide".split())
 
 
+def _skills_de_prompt(e):
+    """Slash commands del prompt que no son comandos nativos (fuente unica: Uso y sesion)."""
+    c = (e.get("message") or {}).get("content")
+    return [cmd for cmd in _RE_COMANDO.findall(c if isinstance(c, str) else "") if cmd not in _COMANDOS_NATIVOS]
+
+
+def _clasificar_tool(b):
+    """("skill", nombre) | ("conector", servidor, "lecturas"|"escrituras") | None."""
+    nombre = b.get("name") or "?"
+    if nombre == "Skill" and isinstance(b.get("input"), dict) and b["input"].get("skill"):
+        return ("skill", b["input"]["skill"])
+    if nombre.startswith("mcp__") and nombre.count("__") >= 2:
+        _, srv, tool_ = nombre.split("__", 2)
+        lectura = _VERBOS_LECTURA & set(re.split(r"[_\-]", tool_.lower()))
+        return ("conector", srv, "lecturas" if lectura else "escrituras")
+    return None
+
+
+def _contar_clase(clase, skills, conectores):
+    if clase and clase[0] == "skill":
+        skills[clase[1]] = skills.get(clase[1], 0) + 1
+    elif clase:
+        c = conectores.setdefault(clase[1], {"lecturas": 0, "escrituras": 0})
+        c[clase[2]] += 1
+
+
 def _texto_resultado(b):
     c = b.get("content")
     return c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)
@@ -1184,10 +1210,8 @@ def _acumular_uso(meses, lineas, sesion, sidechain):
         if es_prompt(e) and not sidechain:
             d["prompts"] += 1
             d["sesiones"].add(sesion)
-            c = (e.get("message") or {}).get("content")
-            for cmd in _RE_COMANDO.findall(c if isinstance(c, str) else ""):
-                if cmd not in _COMANDOS_NATIVOS:
-                    m["skills"][cmd] = m["skills"].get(cmd, 0) + 1
+            for cmd in _skills_de_prompt(e):
+                m["skills"][cmd] = m["skills"].get(cmd, 0) + 1
         for b in blocks_de(e):
             if not isinstance(b, dict):
                 continue
@@ -1197,20 +1221,83 @@ def _acumular_uso(meses, lineas, sesion, sidechain):
                     continue  # misma respuesta repetida en otra linea
                 nombres[b.get("id")] = nombre
                 d["tools"] += 1
-                if nombre == "Skill" and isinstance(b.get("input"), dict) and b["input"].get("skill"):
-                    s = b["input"]["skill"]
-                    m["skills"][s] = m["skills"].get(s, 0) + 1
-                elif nombre.startswith("mcp__") and nombre.count("__") >= 2:
-                    _, srv, tool_ = nombre.split("__", 2)
-                    c = m["conectores"].setdefault(srv, {"lecturas": 0, "escrituras": 0})
-                    lectura = _VERBOS_LECTURA & set(re.split(r"[_\-]", tool_.lower()))
-                    c["lecturas" if lectura else "escrituras"] += 1
+                _contar_clase(_clasificar_tool(b), m["skills"], m["conectores"])
             elif b.get("type") == "tool_result" and nombres.get(b.get("tool_use_id")) in _TOOLS_EDICION:
                 if _rechazado(e, b):
                     m["rechazadas"] += 1
                 elif isinstance(e.get("toolUseResult"), dict):
                     m["aceptadas"] += 1
                     d["lineas"] += _lineas_aceptadas(e["toolUseResult"])
+
+
+FAMILIAS_TOOL = (("Edicion", frozenset(_TOOLS_EDICION)),
+                 ("Lectura", frozenset(("Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "NotebookRead"))),
+                 ("Bash", frozenset(("Bash",))),
+                 ("MCP", None))  # None = cualquier mcp__*
+PROFUNDIDAD_TOOLS = (5, 20)
+
+
+def _familia(nombre):
+    for fam, nombres in FAMILIAS_TOOL:
+        if (nombre.startswith("mcp__") if nombres is None else nombre in nombres):
+            return fam
+    return None
+
+
+def uso_sesion(lineas):
+    """Uso de ESTA sesion turno a turno (los graficos del dashboard de Claude con
+    eje = turno). Misma numeracion que el loop: solo prompts con inferencias. None si no hay."""
+    det = _turnos_detalle(lineas)
+    filas = [{"turno": 0, "ts": t["ts"], "inferencias": len(t["infs"]), "tools": 0, "nativas": 0,
+              "mcp": 0, "subagentes": 0, "lineas": 0, "familias": set()} for t in det]
+    skills, conectores, acept, rech, nombres, k = {}, {}, 0, 0, {}, -1
+    for e in lineas:
+        if es_prompt(e):
+            k += 1
+            for cmd in _skills_de_prompt(e):
+                skills[cmd] = skills.get(cmd, 0) + 1
+            continue
+        if k < 0 or not isinstance(e, dict):
+            continue
+        f = filas[k]
+        for b in blocks_de(e):
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use" and e.get("type") == "assistant" and b.get("id") not in nombres:
+                n = nombres[b.get("id")] = b.get("name") or "?"
+                f["tools"] += 1
+                f["mcp" if n.startswith("mcp__") else "subagentes" if n in TOOLS_SUBAGENTE else "nativas"] += 1
+                if _familia(n):
+                    f["familias"].add(_familia(n))
+                _contar_clase(_clasificar_tool(b), skills, conectores)
+            elif b.get("type") == "tool_result" and nombres.get(b.get("tool_use_id")) in _TOOLS_EDICION:
+                if _rechazado(e, b):
+                    rech += 1
+                elif isinstance(e.get("toolUseResult"), dict):
+                    acept += 1
+                    f["lineas"] += _lineas_aceptadas(e["toolUseResult"])
+    filas = [f for f in filas if f["inferencias"]]
+    if not filas:
+        return None
+    for n, f in enumerate(filas, 1):
+        f["turno"] = n
+    tools = [f["tools"] for f in filas]
+    mitad = len(tools) // 2
+    a, b = (sum(tools[:mitad]) / mitad, sum(tools[-mitad:]) / mitad) if mitad >= 2 else (0, 0)
+    decididas = acept + rech
+    n_t = len(filas)
+    return {"turnos": [{k_: v for k_, v in f.items() if k_ != "familias"} for f in filas],
+            "kpis": {"acciones_por_prompt": sum(tools) / n_t, "delta": (b / a - 1) if a else None,
+                     "lineas": sum(f["lineas"] for f in filas), "aceptadas": acept, "rechazadas": rech,
+                     "accept_rate": acept / decididas if decididas else None,
+                     "inferencias": sum(f["inferencias"] for f in filas), "tools": sum(tools)},
+            "profundidad": [["Todos los turnos", n_t], ["Con tools", sum(1 for x in tools if x)]]
+                           + [[f"{p}+ tools", sum(1 for x in tools if x >= p)] for p in PROFUNDIDAD_TOOLS],
+            "adherencia": [[fam, c, c / n_t] for fam, _ in FAMILIAS_TOOL
+                           for c in [sum(1 for f in filas if fam in f["familias"])]],
+            "skills": [[s, c] for s, c in sorted(skills.items(), key=lambda x: (-x[1], x[0]))],
+            "conectores": sorted(({"servidor": s, **v} for s, v in conectores.items()),
+                                 key=lambda x: -(x["lecturas"] + x["escrituras"]))}
 
 
 def _cerrar_mes(mes, m, hoy):
@@ -1863,6 +1950,51 @@ def _uso_html(u, up=None, nombre=None):
             f'<script type="application/json" id="claudit-data-uso">{datos}</script>')
 
 
+def _tabla_uso_html(titulo, cols, filas):
+    if not filas:
+        return f'<div class="uso-chart"><h3>{_esc(titulo)}</h3><p class="muted">Sin usos en esta sesion.</p></div>'
+    th = "".join(f"<th>{_esc(c)}</th>" for c in cols)
+    tr = "".join("<tr>" + "".join(f"<td>{_esc(v)}</td>" for v in f) + "</tr>" for f in filas)
+    return (f'<div class="uso-chart chart-wrap"><h3>{_esc(titulo)}</h3><table class="setup-tree">'
+            f"<thead><tr>{th}</tr></thead><tbody>{tr}</tbody></table></div>")
+
+
+def _sesion_uso_html(u):
+    """KPIs, barras y tablas en HTML; las curvas por turno las dibuja el JS con el JSON."""
+    if not u:
+        return '<p class="muted">Esta sesion todavia no tiene turnos con inferencias (sin turnos).</p>'
+    k = u["kpis"]
+    pct = lambda x: "—" if x is None else f"{x * 100:.1f}%"
+    delta = ("sin mitades comparables (menos de 4 turnos)" if k["delta"] is None
+             else f"{k['delta']:+.0%} en la 2.a mitad de la sesion vs la 1.a")
+    kpis = [("Acciones por prompt", f"{k['acciones_por_prompt']:.1f}",
+             f"{k['tools']} tool calls / {len(u['turnos'])} turnos · {delta}. Mas alto = mas trabajo autonomo por pedido."),
+            ("Lineas aceptadas", f"{k['lineas']:,}", "Lineas agregadas por Edit/Write aplicados en esta sesion."),
+            ("Accept rate", pct(k["accept_rate"]), f"{k['aceptadas']} ediciones aplicadas · {k['rechazadas']} rechazadas."),
+            ("Turnos", f"{len(u['turnos'])}", f"{k['inferencias']} inferencias en total.")]
+    cajas = "".join(f'<div class="metric" data-tip="{_esc(t)}"><strong>{_esc(v)}</strong><span>{_esc(n)}</span></div>'
+                    for n, v, t in kpis)
+    tope = max(c for _, c in u["profundidad"]) or 1
+    barras = "".join(f'<div class="us-bar" data-tip="{_esc(f"{c} de {u["profundidad"][0][1]} turnos")}">'
+                     f'<b>{c}</b><i style="height:{c / tope * 100:.0f}%"></i><span>{_esc(n)}</span></div>'
+                     for n, c in u["profundidad"])
+    adh = "".join(f'<div class="us-adh-fila"><span class="us-adh-lbl">{_esc(f)}</span>'
+                  f'<span class="us-adh-pct">{p:.0%} de los turnos</span>'
+                  f'<div class="us-adh-track" title="{c} turnos"><i style="width:{p * 100:.0f}%"></i></div></div>'
+                  for f, c, p in u["adherencia"])
+    datos = json.dumps({"turnos": u["turnos"]}, ensure_ascii=False).replace("</", "<\\/")
+    return (f'<div class="metric-boxes us-kpis">{cajas}</div>'
+            '<div class="uso-grid" id="us-charts"></div>'
+            '<div class="uso-grid">'
+            f'<div class="uso-chart"><h3>Profundidad de los turnos<span>tools por turno</span></h3><div class="us-barras">{barras}</div></div>'
+            f'<div class="uso-chart"><h3>Adherencia por familia<span>% de turnos que la usaron</span></h3><div class="us-adh">{adh}</div></div>'
+            '</div><div class="uso-grid">'
+            + _tabla_uso_html("Skills", ["Skill", "Usos"], u["skills"])
+            + _tabla_uso_html("Conectores (MCP)", ["Conector", "Lecturas", "Escrituras"],
+                              [[c["servidor"], c["lecturas"], c["escrituras"]] for c in u["conectores"]])
+            + f'</div><script type="application/json" id="claudit-data-sesion-uso">{datos}</script>')
+
+
 def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None):
     """Arma el reporte HTML self-contained y lo escribe en `destino` (Path).
 
@@ -1908,6 +2040,7 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     out = out.replace("__CLAUDIT_HOOKS__", _salud_hooks_html(*hooks_con_previa(jsonl, lineas))
                       + f'<p class="muted">{_esc(linea_primer_turno(turnos(lineas)))}</p>')
     out = out.replace("__CLAUDIT_LOOP__", _loop_html(loop_agentico(lineas)))
+    out = out.replace("__CLAUDIT_SESION_USO__", _sesion_uso_html(uso_sesion(lineas)))
     out = out.replace("__CLAUDIT_CURVA__", _curva_contexto_html(analisis_ventana(filas))
                       + _retomadas_html(retomadas_cache_vencida(filas)))
     out = out.replace("__CLAUDIT_ARIA_COMP__", _esc(_aria_composicion(items_comp)))

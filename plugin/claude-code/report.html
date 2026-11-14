@@ -169,7 +169,21 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .uso-chart .area{fill:var(--primary);opacity:.16;} .uso-chart .line{fill:none;stroke:var(--primary);stroke-width:2;stroke-linejoin:round;}
 .uso-chart .hit{fill:transparent;} .uso-chart .cross{stroke:var(--muted);stroke-dasharray:3 3;}
 .uso-chart .dot{fill:var(--primary);stroke:var(--surface-2);stroke-width:2;}
-.uso-chart .grid{stroke:var(--line);stroke-width:1;} .uso-chart text{fill:var(--muted);font:12px var(--font-sans);}
+.uso-chart .grid{stroke:var(--line);stroke-width:1;}
+.us-kpis{grid-template-columns:repeat(4,minmax(0,1fr));}
+@media (max-width:760px){.us-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}}
+.us-s1{--c:#3987e5;} .us-s2{--c:#d95926;} .us-s3{--c:#199e70;}
+.uso-chart .ml{fill:none;stroke:var(--c);stroke-width:2;stroke-linejoin:round;} .uso-chart .mdot{fill:var(--c);stroke:var(--surface-2);stroke-width:2;}
+.legend i.us-s1,.legend i.us-s2,.legend i.us-s3{background:var(--c);}
+.us-barras{display:flex;align-items:flex-end;gap:14px;height:190px;padding-top:8px;}
+.us-bar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;min-width:0;cursor:help;}
+.us-bar i{display:block;width:70%;max-width:64px;min-height:2px;background:var(--primary);border-radius:4px 4px 0 0;}
+.us-bar b{font:600 13px var(--font-mono);margin-bottom:4px;} .us-bar span{color:var(--muted);font-size:12px;margin-top:6px;text-align:center;}
+.us-adh{display:flex;flex-direction:column;gap:14px;padding-top:8px;}
+.us-adh-fila{display:grid;grid-template-columns:1fr auto;gap:4px 10px;font-size:13px;}
+.us-adh-pct{color:var(--muted);font-family:var(--font-mono);}
+.us-adh-track{grid-column:1/-1;height:10px;border-radius:5px;background:color-mix(in srgb,var(--primary) 18%,transparent);overflow:hidden;}
+.us-adh-track i{display:block;height:100%;background:var(--primary);border-radius:5px;} .uso-chart text{fill:var(--muted);font:12px var(--font-sans);}
 @media (max-width:760px){.uso-grid{grid-template-columns:1fr;}}
 </style>
 </head>
@@ -199,6 +213,7 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
     </div>
     <div class="sn-group" data-group="uso">
       <a class="sn-head" data-tab="uso" href="#uso"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Uso</a>
+      <a class="sn-item" data-tab="uso" href="#u-sesion">Cómo se usó la sesión</a>
       <a class="sn-item" data-tab="uso" href="#u-cupo">Cupo 5 h</a>
       <a class="sn-item" data-tab="uso" href="#u-mes">Uso por mes</a>
     </div>
@@ -317,6 +332,14 @@ __CLAUDIT_CURVA__
 </div>
 
 <div class="tab-panel" role="region" aria-label="Uso" data-panel="uso" hidden>
+<section class="card" id="u-sesion">
+  <div class="chart-head">
+    <h2>Cómo se usó la sesión — turno a turno</h2>
+  </div>
+  <p class="muted">Los graficos del dashboard de Claude, pero de ESTA sesion y con el eje en turnos (prompt humano → respuesta final) en vez de dias. Autonomia = tool calls por turno separadas en tools nativas, conectores MCP y sub-agentes; actividad = inferencias y tool calls por turno; profundidad = cuantos turnos llegaron a 5+ y 20+ tools; adherencia = % de turnos que usaron cada familia de tools. Misma numeracion de turnos que Loop agentico.</p>
+__CLAUDIT_SESION_USO__
+</section>
+
 <section class="card" id="u-cupo">
   <div class="chart-head">
     <h2>Cupo — consumo local</h2>
@@ -563,6 +586,65 @@ function claudinUso(){
   pintar();
 }
 
+var CLAUDIT_US_CHARTS=[
+  {t:'¿Que tan autonomo es el trabajo?', sub:'acciones por turno', series:[
+    {k:'nativas', n:'Tools nativas'}, {k:'mcp', n:'Conectores MCP'}, {k:'subagentes', n:'Sub-agentes'}]},
+  {t:'Actividad', sub:'por turno', series:[{k:'inferencias', n:'Inferencias'}, {k:'tools', n:'Tool calls'}]},
+  {t:'Lineas de codigo', sub:'aceptadas por turno', series:[{k:'lineas', n:'Lineas aceptadas'}]}
+];
+
+function claudinMultiSvg(filas, series){
+  var W=600, H=190, L=44, R=8, B=24, T=10, n=filas.length, ph=H-B-T, step=(W-L-R)/Math.max(1,n-1), base=T+ph;
+  var top=Math.max.apply(null,[0].concat.apply([0],series.map(function(s){return filas.map(function(f){return f[s.k];});})))||1;
+  var p10=Math.pow(10,Math.floor(Math.log10(top))), fr=top/p10, max=(fr<=1?1:fr<=2?2:fr<=5?5:10)*p10;
+  var s='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+claudinEscHtml(series.map(function(x){return x.n;}).join(', ')+' por turno, '+n+' turnos')+'">';
+  [0,.5,1].forEach(function(p){ var y=T+ph*(1-p)+.5;
+    s+='<line class="grid" x1="'+L+'" x2="'+(W-R)+'" y1="'+y+'" y2="'+y+'"/><text x="'+(L-6)+'" y="'+(y+4)+'" text-anchor="end">'+Math.round(max*p).toLocaleString()+'</text>'; });
+  var x=function(i){ return n===1?(L+W-R)/2:+(L+i*step).toFixed(1); };
+  series.forEach(function(se,j){
+    var pts=filas.map(function(f,i){ return [x(i), +(base-ph*f[se.k]/max).toFixed(1)]; });
+    s+='<path class="ml us-s'+(j+1)+'" d="'+claudinMonoPath(pts)+'"/>';
+  });
+  var cada=Math.max(1,Math.ceil(n/10));
+  filas.forEach(function(f,i){ if(i%cada===0||i===n-1) s+='<text x="'+x(i)+'" y="'+(H-6)+'" text-anchor="middle">'+f.turno+'</text>'; });
+  s+='<line class="cross" x1="0" x2="0" y1="'+T+'" y2="'+base+'" visibility="hidden"/>';
+  series.forEach(function(se,j){ s+='<circle class="mdot us-s'+(j+1)+'" r="4" cx="0" cy="0" visibility="hidden"/>'; });
+  var w=n===1?W-L-R:step;
+  filas.forEach(function(f,i){ s+='<rect class="hit" data-i="'+i+'" data-x="'+x(i)+'" x="'+(x(i)-w/2)+'" y="'+T+'" width="'+w+'" height="'+ph+'"/>'; });
+  return s+'</svg>';
+}
+
+function claudinSesionUso(){
+  var el=document.getElementById('claudit-data-sesion-uso'), box=document.getElementById('us-charts'); if(!el||!box) return;
+  var D; try{D=JSON.parse(el.textContent);}catch(e){return;}
+  var F=D.turnos;
+  box.innerHTML=CLAUDIT_US_CHARTS.map(function(c,ci){
+    var tot=c.series.map(function(se){return F.reduce(function(a,f){return a+f[se.k];},0);});
+    var ley=c.series.length>1?'<div class="legend">'+c.series.map(function(se,j){
+      return '<span><i class="us-s'+(j+1)+'"></i>'+claudinEscHtml(se.n)+' · '+tot[j].toLocaleString()+'</span>';}).join('')+'</div>':'';
+    return '<div class="uso-chart" data-c="'+ci+'"><h3>'+claudinEscHtml(c.t)+'<span>'+claudinEscHtml(c.sub)+(c.series.length>1?'':' · total '+tot[0].toLocaleString())+'</span></h3>'+ley+claudinMultiSvg(F,c.series)+'</div>';
+  }).join('');
+  box.querySelectorAll('.uso-chart').forEach(function(card){
+    var c=CLAUDIT_US_CHARTS[+card.dataset.c], cross=card.querySelector('.cross'), dots=card.querySelectorAll('.mdot');
+    var svg=card.querySelector('svg'), max=0;
+    card.querySelectorAll('.hit').forEach(function(h){
+      h.addEventListener('mousemove',function(e){
+        var f=F[+h.dataset.i], vb=svg.viewBox.baseVal, ph=vb.height-34, top=0;
+        c.series.forEach(function(se){ top=Math.max(top, Math.max.apply(null,F.map(function(x){return x[se.k];}))); });
+        var p10=Math.pow(10,Math.floor(Math.log10(top||1))), fr=(top||1)/p10, mx=(fr<=1?1:fr<=2?2:fr<=5?5:10)*p10;
+        cross.setAttribute('x1',h.dataset.x); cross.setAttribute('x2',h.dataset.x); cross.setAttribute('visibility','visible');
+        c.series.forEach(function(se,j){ dots[j].setAttribute('cx',h.dataset.x); dots[j].setAttribute('cy',10+ph-ph*f[se.k]/mx); dots[j].setAttribute('visibility','visible'); });
+        claudinShowTip(e.clientX,e.clientY,'Turno #'+f.turno, c.series.map(function(se){return se.n+': '+f[se.k].toLocaleString();}).join(' · ')+' · '+f.inferencias+' inferencias');
+      });
+      h.addEventListener('mouseleave',function(){ claudinHideTip(); cross.setAttribute('visibility','hidden'); dots.forEach(function(d){d.setAttribute('visibility','hidden');}); });
+    });
+  });
+  document.querySelectorAll('.us-bar[data-tip]').forEach(function(b){
+    b.addEventListener('mousemove',function(e){ claudinShowTip(e.clientX,e.clientY,b.querySelector('span').textContent,b.dataset.tip); });
+    b.addEventListener('mouseleave',claudinHideTip);
+  });
+}
+
 function claudinNav(){
   var nav=document.getElementById('sidenav'), tog=document.querySelector('.sn-toggle'), scrim=document.querySelector('.sn-scrim');
   var links=[].slice.call(nav.querySelectorAll('a[data-tab]'));
@@ -615,6 +697,7 @@ window.addEventListener('resize',claudinDrawAll);
 claudinDrawAll();
 claudinWireMetrics();
 claudinUso();
+claudinSesionUso();
 claudinNav();
 (function claudinTipPag(){
   document.querySelectorAll('.tip-pag').forEach(function(nav){

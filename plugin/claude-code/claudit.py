@@ -1497,9 +1497,11 @@ def _tips_html(setup):
     for c in editables:
         marca = palanca(c["tok"], True)
         marca_html = f'<span class="tip-marca">{_esc(marca)}</span>' if marca else '<span class="tip-marca muted">—</span>'
+        sub = "".join(f'<li><span>{_esc(t)}</span><code>{_tok0(k)} tok</code></li>' for t, k in c.get("secc") or [])
         filas.append(
             f'<li>{marca_html} <strong>{_esc(c["label"])}</strong> '
-            f'<span class="muted">— {_tok0(c["tok"])} tok/turno</span></li>'
+            f'<span class="muted">— {_tok0(c["tok"])} tok/turno</span>'
+            + (f'<ul class="tip-sub">{sub}</ul>' if sub else "") + '</li>'
         )
     return "\n".join(filas)
 

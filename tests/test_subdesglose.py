@@ -51,6 +51,16 @@ class TestSkillsPorSkill(unittest.TestCase):
         self.assertIn("resto (5 skills)", [t for t, _ in c["secc"]])
 
 
+class TestTipsConDetalle(unittest.TestCase):
+    def test_tip_lista_el_sub_desglose(self):
+        s = {"componentes": [{"label": "skill_listing (skills instaladas)", "tok": 7000, "editable": True,
+                              "secc": [("flow", 900.0), ("resto (3 skills)", 300.0)], "tipo": "skills"}]}
+        html = claudit._tips_html(s)
+        self.assertIn("tip-sub", html)
+        self.assertIn("flow", html)
+        self.assertIn("resto (3 skills)", html)
+
+
 class TestLeyendaCacheWrite(unittest.TestCase):
     def test_leyenda_con_ambos_colores(self):
         tpl = (Path(claudit.__file__).parent / "report.html").read_text("utf-8")

@@ -46,6 +46,8 @@ header{border:1px solid var(--line);background:linear-gradient(135deg,var(--surf
 .chart-pct span{font-size:12px;color:var(--muted);}
 .chart-wrap{overflow-x:auto;}
 canvas{width:100%;display:block;}
+.legend{display:flex;flex-wrap:wrap;gap:8px 20px;margin:4px 0 10px;color:var(--muted);font-size:13px;}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:8px;vertical-align:-1px;}
 .tips-intro{margin:0 0 14px;color:var(--muted);font-size:14px;line-height:1.55;}
 .tips-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;}
 .tips-list li{border-bottom:1px solid var(--line);padding-bottom:10px;font-size:14px;}
@@ -183,7 +185,8 @@ __CLAUDIT_SETUP_ROWS__
     <h2>Cache-write — por inferencia</h2>
     <div class="chart-pct"><strong>__CLAUDIT_WRITE_PCT__%</strong><span>del total de tokens</span></div>
   </div>
-  <p class="muted">Una barra por turno. Altura = tokens nuevos escritos al cache ese turno (el contenido que entro y se cacheo). El pico grande esta al arranque (se cachea el setup); despues se escribe algo cada turno segun cuanto contenido nuevo entro. Aparecen picos EXTRA cuando el cache se re-crea: tras un /compact, tras un hueco de inactividad &gt;__CLAUDIT_TTL__ (el cache expira, TTL) o al entrar contenido nuevo grande. <strong>Color:</strong> azul = primera inferencia del turno; naranja = inferencias hermanas (tool-calls encadenados del mismo turno, que comparten el cache ya re-escrito &mdash; no son un write nuevo).</p>
+  <p class="muted">Una barra por turno. Altura = tokens nuevos escritos al cache ese turno (el contenido que entro y se cacheo). El pico grande esta al arranque (se cachea el setup); despues se escribe algo cada turno segun cuanto contenido nuevo entro. Aparecen picos EXTRA cuando el cache se re-crea: tras un /compact, tras un hueco de inactividad &gt;__CLAUDIT_TTL__ (el cache expira, TTL) o al entrar contenido nuevo grande.</p>
+  <div class="legend"><span><i style="background:var(--primary)"></i>Primera inferencia del turno &mdash; el write real de ese turno</span><span><i style="background:var(--mid)"></i>Inferencias hermanas &mdash; tool-calls encadenados del mismo turno; comparten el cache ya escrito, no son un write nuevo</span></div>
   <div class="chart-wrap">
     <canvas id="claudit-chart-write" height="220" role="img" aria-label="__CLAUDIT_ARIA_WRITE__"></canvas>
   </div>

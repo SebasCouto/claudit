@@ -88,7 +88,15 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .setup-tree .r-sub td{color:var(--muted);border-bottom:none;}
 .setup-tree .p-mark{color:var(--bad);font-weight:700;}
 .setup-tree .h-ok{color:var(--good);font-weight:700;} .setup-tree .h-nok{color:var(--bad);font-weight:700;}
-.setup-tree td.h-estado{white-space:normal;overflow-wrap:anywhere;text-align:left;font-size:12px;}
+.setup-tree td.h-estado{white-space:nowrap;text-align:left;font-size:12px;}
+.h-nok{display:inline-flex;align-items:center;gap:4px;} .h-warn{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+.h-corto{color:var(--muted);font-family:var(--font-mono);}
+.h-ayuda{display:inline-grid;place-items:center;width:18px;height:18px;margin-left:6px;padding:0;border-radius:50%;border:1px solid var(--line);background:var(--surface-2);color:var(--muted);font:700 11px var(--font-sans);cursor:help;vertical-align:-3px;}
+.h-ayuda:hover,.h-ayuda:focus-visible{color:var(--ink);border-color:var(--muted);outline:2px solid var(--primary);outline-offset:1px;}
+.h-turno{margin-top:16px;font-size:14px;} .h-turno p{margin:0 0 8px;}
+.h-tools{margin:0;padding-left:20px;columns:2 260px;column-gap:28px;font-size:13px;}
+.h-tools li{break-inside:avoid;padding:2px 0;color:var(--ink);} .h-tools li::marker{color:var(--muted);}
+.h-tools b{margin-left:8px;font:600 12px var(--font-mono);color:var(--muted);} .h-tools .muted{font-size:12px;}
 .setup-tree .p-none{color:var(--muted);}
 .k-sistema{--k:hsl(215 12% 55%);} .k-tools{--k:hsl(220 80% 65%);} .k-mcp_tools{--k:hsl(175 60% 45%);}
 .k-mcp{--k:hsl(190 70% 55%);} .k-agentes{--k:hsl(265 70% 68%);} .k-memoria{--k:hsl(38 92% 55%);}
@@ -698,6 +706,11 @@ claudinDrawAll();
 claudinWireMetrics();
 claudinUso();
 claudinSesionUso();
+document.querySelectorAll('.h-ayuda[data-tip]').forEach(function(b){
+  function ver(e){ var r=b.getBoundingClientRect(); claudinShowTip(e&&e.clientX||r.right, e&&e.clientY||r.top, b.dataset.tipTitle||'', b.dataset.tip); }
+  b.addEventListener('mousemove',ver); b.addEventListener('focus',function(){ver();});
+  b.addEventListener('mouseleave',claudinHideTip); b.addEventListener('blur',claudinHideTip);
+});
 claudinNav();
 (function claudinTipPag(){
   document.querySelectorAll('.tip-pag').forEach(function(nav){

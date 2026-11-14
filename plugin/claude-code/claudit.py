@@ -494,15 +494,25 @@ def salud_hooks(lineas):
             continue
         texto = att.get("content") if isinstance(att.get("content"), str) else (att.get("stdout") or "")
         primera = next((l for l in str(texto).splitlines() if l.strip()), "")
-        motivos = []
-        if str(att.get("stderr") or "").strip():
-            motivos.append("stderr: " + str(att["stderr"]).strip().splitlines()[0][:60])
-        if att.get("exitCode") not in (None, 0):
-            motivos.append(f"exitCode {att.get('exitCode')}")
+        motivos, fallas = [], []
+        err = str(att.get("stderr") or "").strip()
+        if err:
+            motivos.append("stderr: " + err.splitlines()[0][:60])
+            fallas.append({"corto": "stderr", "detalle": err.splitlines()[0][:300],
+                           "que": "El hook escribio en stderr al arrancar: algo fallo o advirtio, "
+                                  "y lo que deberia inyectar al contexto puede faltar."})
+        code = att.get("exitCode")
+        if code not in (None, 0):
+            motivos.append(f"exitCode {code}")
+            fallas.append({"corto": f"exit {code}", "detalle": f"exitCode {code}",
+                           "que": f"Termino con codigo {code} (distinto de 0): Claude Code lo da por fallido."})
         if _MARCA_DEGRADADO.match(primera):
             motivos.append(primera.strip()[:60])
+            fallas.append({"corto": "aviso", "detalle": primera.strip()[:300],
+                           "que": "La salida arranca con warning/error: el hook inyecta un aviso "
+                                  "en vez de (o ademas de) el contenido esperado."})
         out.append({"label": etiqueta_hook(att), "chars": chars_hook(att),
-                    "degradado": bool(motivos), "motivo": "; ".join(motivos)})
+                    "degradado": bool(motivos), "motivo": "; ".join(motivos), "fallas": fallas})
     return out
 
 
@@ -1901,12 +1911,47 @@ def _retomadas_html(eventos):
             f'<p class="muted">Recomendacion: {_esc(_RECO_RETOMADA)}.</p></div>')
 
 
+_SVG_WARN = ('<svg class="h-warn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 21h20L12 3z"/>'
+             '<path d="M12 10v5M12 18v.01"/></svg>')
+
+
+def _estado_hook_html(h):
+    """Ok verde, o nOk rojo con icono de aviso + motivos cortos; el detalle completo y
+    que significa van en el tooltip del boton '?' (hover o foco)."""
+    if not h["degradado"]:
+        return '<span class="h-ok">Ok</span>'
+    fallas = h.get("fallas") or [{"corto": m.split(":")[0][:20], "detalle": m, "que": ""}
+                                 for m in (h.get("motivo") or "degradado").split("; ")]
+    cortos = " · ".join(f'<span class="h-corto">{_esc(f["corto"])}</span>' for f in fallas)
+    tip = " ".join(f'{f["detalle"]} — {f["que"]}'.rstrip(" —") for f in fallas)
+    return (f'<span class="h-nok">{_SVG_WARN}nOk</span> {cortos} '
+            f'<button type="button" class="h-ayuda" aria-label="Que significa: {_esc(tip)}" '
+            f'data-tip-title="{_esc(h["label"])}" data-tip="{_esc(tip)}">?</button>')
+
+
+def _primer_turno_html(ts_):
+    """1.er turno como lista: una viñeta por tool (mas usada primero); MCP abreviado."""
+    if not ts_:
+        return '<p class="muted">1.er turno: sin prompts</p>'
+    t = ts_[0]
+    tools = sorted(t["tools"].items(), key=lambda kv: (-kv[1], kv[0]))
+    def nombre(n):
+        if n.startswith("mcp__") and n.count("__") >= 2:
+            _, srv, tool_ = n.split("__", 2)
+            return f'<code>{_esc(tool_)}</code> <span class="muted">MCP {_esc(srv)}</span>'
+        return f"<code>{_esc(n)}</code>"
+    items = "".join(f'<li title="{_esc(n)}">{nombre(n)}<b>×{c}</b></li>' for n, c in tools)
+    return (f'<div class="h-turno"><p><strong>1.er turno</strong> · {t["inferencias"]} inferencias · '
+            f'{sum(t["tools"].values())} tool calls</p>'
+            + (f'<ul class="h-tools">{items}</ul>' if items else '<p class="muted">sin tools</p>') + '</div>')
+
+
 def _salud_hooks_html(actual, avisos):
     if not actual:
         return '<p class="muted">Sin hooks en el arranque.</p>'
     filas = "".join(
         f'<tr><td>{_esc(h["label"])}</td><td>{_tok0(h["chars"])}</td>'
-        f'<td class="h-estado">{"<span class=\"h-nok\">nOk</span> " + _esc(h["motivo"]) if h["degradado"] else "<span class=\"h-ok\">Ok</span>"}</td></tr>'
+        f'<td class="h-estado">{_estado_hook_html(h)}</td></tr>'
         for h in actual)
     av = "".join(f'<div class="ctx-alerta">{_esc(a["label"])} inyecta mucho menos que en la sesion previa: '
                  f'{_tok0(a["antes"])} &rarr; {_tok0(a["ahora"])} chars.</div>' for a in avisos)
@@ -2038,7 +2083,7 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     nombre = REPO.name if jsonl.parent == dir_proyecto() else proy
     out = out.replace("__CLAUDIT_USO__", _uso_html(metricas_uso(), metricas_uso(proyecto=proy), nombre))
     out = out.replace("__CLAUDIT_HOOKS__", _salud_hooks_html(*hooks_con_previa(jsonl, lineas))
-                      + f'<p class="muted">{_esc(linea_primer_turno(turnos(lineas)))}</p>')
+                      + _primer_turno_html(turnos(lineas)))
     out = out.replace("__CLAUDIT_LOOP__", _loop_html(loop_agentico(lineas)))
     out = out.replace("__CLAUDIT_SESION_USO__", _sesion_uso_html(uso_sesion(lineas)))
     out = out.replace("__CLAUDIT_CURVA__", _curva_contexto_html(analisis_ventana(filas))

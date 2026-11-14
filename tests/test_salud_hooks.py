@@ -61,7 +61,8 @@ class TestComparacion(unittest.TestCase):
     def test_texto_y_html_marcan_degradado(self):
         act = claudit.salud_hooks(arranque(hook("warning: mismatch")))
         html = claudit._salud_hooks_html(act, [])
-        self.assertIn('class="h-nok">nOk</span> warning: mismatch', html)
+        self.assertIn('class="h-nok"', html)
+        self.assertIn("warning: mismatch", html)
 
 
 class TestSesionPrevia(unittest.TestCase):
@@ -85,7 +86,53 @@ class TestEstadoColoreado(unittest.TestCase):
             [{"label": "a", "chars": 10, "degradado": False, "motivo": ""},
              {"label": "b", "chars": 10, "degradado": True, "motivo": "stderr"}], [])
         self.assertIn('<span class="h-ok">Ok</span>', html)
-        self.assertIn('<span class="h-nok">nOk</span> stderr', html)
+        self.assertIn('class="h-nok"', html)
+        self.assertIn('<span class="h-corto">stderr</span>', html)
+
+
+ERROR_LARGO = "No existe el directorio de proyecto: /ruta/inventada/"
+
+
+class TestEstadoAcotado(unittest.TestCase):
+    def setUp(self):
+        self.s = claudit.salud_hooks(arranque(hook("x", stderr=ERROR_LARGO, exitCode=1)))
+        self.html = claudit._salud_hooks_html(self.s, [])
+
+    def test_fallas_estructuradas(self):
+        self.assertEqual([f["corto"] for f in self.s[0]["fallas"]], ["stderr", "exit 1"])
+        self.assertIn(ERROR_LARGO, self.s[0]["fallas"][0]["detalle"])
+
+    def test_celda_corta_con_icono_de_aviso(self):
+        celda = self.html.split('class="h-estado">')[1].split("</td>")[0]
+        visible = celda.split("<button")[0]
+        self.assertIn('class="h-warn"', visible)
+        self.assertIn("stderr · exit 1", visible.replace('</span> · <span class="h-corto">', " · ")
+                      .replace('<span class="h-corto">', "").replace("</span>", ""))
+        self.assertNotIn(ERROR_LARGO, visible)
+
+    def test_boton_de_ayuda_explica_en_tooltip(self):
+        boton = self.html.split("<button")[1].split("</button>")[0]
+        self.assertIn('class="h-ayuda"', boton)
+        self.assertIn("aria-label=", boton)
+        self.assertIn(ERROR_LARGO, boton)
+        self.assertIn("codigo 1", boton)
+
+
+class TestPrimerTurnoEnLista(unittest.TestCase):
+    def test_bullets_por_tool_ordenados_y_mcp_abreviado(self):
+        ts_ = [{"ts": None, "inferencias": 151,
+                "tools": {"Read": 21, "Bash": 138, "mcp__plugin_engram_engram__mem_save": 2}}]
+        html = claudit._primer_turno_html(ts_)
+        self.assertIn("151 inferencias", html)
+        self.assertIn("161 tool calls", html)
+        items = html.split('<ul class="h-tools">')[1].split("</ul>")[0].split("<li")[1:]
+        self.assertEqual(len(items), 3)
+        self.assertIn("Bash", items[0])
+        self.assertIn("mem_save", items[2])
+        self.assertIn("plugin_engram_engram", items[2])  # servidor visible, en segundo plano
+
+    def test_sin_prompts(self):
+        self.assertIn("sin prompts", claudit._primer_turno_html([]))
 
 
 if __name__ == "__main__":

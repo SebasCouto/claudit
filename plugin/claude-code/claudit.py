@@ -709,7 +709,7 @@ def _frontmatter(path):
 def fuente_skill(nombre):
     """(proveedor, fuente, version_skill) de una skill del skill_listing."""
     if nombre.startswith("anthropic-skills:"):
-        return "Anthropic", "claude.ai (anthropic-skills)", ""
+        return "anthropic", "claude.ai (anthropic-skills)", ""
     if ":" in nombre:
         plugin = nombre.split(":", 1)[0]
         return f"Plugin {plugin}", f"plugin {plugin}", ""
@@ -720,7 +720,7 @@ def fuente_skill(nombre):
             autor, version = _frontmatter(md)
             prov = "Proyecto" if fuente.endswith("proyecto") else autor or etiqueta_personales()
             return prov, fuente, version
-    return "Anthropic", "Claude Code (incluida)", ""
+    return "anthropic", "Claude Code (incluida)", ""
 
 
 def escanear_listados(raiz=None):

@@ -25,8 +25,8 @@ class TestFuenteSkill(unittest.TestCase):
         skill(self.home / "repo" / ".claude" / "skills", "deploy")
 
     def test_anthropic_desde_claude_ai_y_desde_claude_code(self):
-        self.assertEqual(claudit.fuente_skill("anthropic-skills:docx")[:2], ("Anthropic", "claude.ai (anthropic-skills)"))
-        self.assertEqual(claudit.fuente_skill("dataviz")[:2], ("Anthropic", "Claude Code (incluida)"))
+        self.assertEqual(claudit.fuente_skill("anthropic-skills:docx")[:2], ("anthropic", "claude.ai (anthropic-skills)"))
+        self.assertEqual(claudit.fuente_skill("dataviz")[:2], ("anthropic", "Claude Code (incluida)"))
 
     def test_plugin_por_prefijo(self):
         self.assertEqual(claudit.fuente_skill("claudit:claudit")[:2], ("Plugin claudit", "plugin claudit"))
@@ -85,7 +85,7 @@ class TestSkillsHtml(unittest.TestCase):
         self.html = claudit._skills_html(_filas(), [("2.1.282", "2026-09-30"), ("2.1.301", "2026-10-18")])
 
     def test_cada_skill_lleva_proveedor_fuente_y_fecha(self):
-        self.assertIn('data-prov="Anthropic"', self.html)
+        self.assertIn('data-prov="anthropic"', self.html)
         self.assertIn('data-prov="Personales globales"', self.html)
         self.assertIn("claude.ai (anthropic-skills)", self.html)
         self.assertIn("2026-09-30", self.html)
@@ -94,12 +94,12 @@ class TestSkillsHtml(unittest.TestCase):
         filtros = self.html.split('class="sk-filtros"')[1].split("</div>")[0]
         self.assertIn('aria-pressed="true">Todas (15)', filtros)
         self.assertIn(">Personales globales (14)", filtros)
-        self.assertIn(">Anthropic (1)", filtros)
+        self.assertIn(">anthropic (1)", filtros)
 
     def test_boton_excel_y_datos_para_exportar(self):
         self.assertIn('id="sk-xlsx"', self.html)
         datos = json.loads(self.html.split('id="claudit-data-skills">')[1].split("</script>")[0])
-        self.assertEqual(datos[0], {"skill": "anthropic-skills:pdf", "proveedor": "Anthropic",
+        self.assertEqual(datos[0], {"skill": "anthropic-skills:pdf", "proveedor": "anthropic",
                                     "fuente": "claude.ai (anthropic-skills)", "tok": 50,
                                     "desde": "", "cc": "", "version": ""})
         self.assertEqual(len(datos), 15)

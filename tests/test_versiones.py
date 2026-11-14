@@ -55,7 +55,12 @@ class TestComponentes(unittest.TestCase):
     def test_plugin_con_instalacion_y_actualizacion(self):
         c = self.comps["claudit"]
         self.assertEqual((c["version"], c["desde"], c["actualizada"]), ("1.4.0", "2026-07-18", "2026-07-20"))
-        self.assertEqual(c["eventos"], [("2026-07-18", "instalado 1.4.0"), ("2026-07-20", "actualizado 1.4.0")])
+        self.assertEqual(c["eventos"], [("2026-07-18", "instalado"), ("2026-07-20", "actualizado 1.4.0")])
+
+    def test_sin_update_la_instalacion_lleva_la_version_actual(self):
+        # installed_plugins.json solo guarda la version actual: con un update posterior, la de
+        # instalacion es desconocida y no se inventa; sin update, es la misma.
+        self.assertEqual(self.comps["otro"]["eventos"], [("2026-08-01", "instalado 2.0.0")])
 
     def test_version_propia_del_binario_si_esta_permitido(self):
         self.assertEqual(self.comps["engram"]["version"], "1.19.0 · plugin 0.1.0")

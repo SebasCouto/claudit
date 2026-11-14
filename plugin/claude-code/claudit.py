@@ -807,9 +807,10 @@ def _plugins_versiones():
             continue
         i = max(inst, key=lambda x: x.get("lastUpdated") or x["installedAt"])
         nombre, v = clave.split("@", 1)[0], str(i.get("version") or "")
-        eventos = [(i["installedAt"][:10], f"instalado {v}")]
-        if (i.get("lastUpdated") or "")[:10] > eventos[0][0]:
-            eventos.append((i["lastUpdated"][:10], f"actualizado {v}"))
+        # el json solo guarda la version actual: con un update posterior, la de instalacion es
+        # desconocida y no se le atribuye la actual
+        desde, act = i["installedAt"][:10], (i.get("lastUpdated") or "")[:10]
+        eventos = [(desde, "instalado"), (act, f"actualizado {v}")] if act > desde else [(desde, f"instalado {v}")]
         binario = _version_binario(BINARIOS_VERSION[nombre]) if nombre in BINARIOS_VERSION else ""
         version = f"{binario} · plugin {v}" if binario else v
         comps.append(_componente(nombre, version, eventos, "installed_plugins.json", "plugin"))

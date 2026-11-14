@@ -70,6 +70,31 @@ class TestLeyendaCacheWrite(unittest.TestCase):
         self.assertIn("var(--mid)", sec)
 
 
+class TestWritePorInferencia(unittest.TestCase):
+    """Cada barra del cache-write es una INFERENCIA; un turno = azul + sus hermanas."""
+
+    FILAS = [{"write": 40000, "ts": fx.ts(0)}, {"write": 900, "ts": fx.ts(0, segundo=5)}]
+
+    def test_items_numerados_por_inferencia(self):
+        a, b = claudit._items_write(self.FILAS)
+        self.assertEqual((a["inferencia"], b["inferencia"]), (1, 2))
+        self.assertNotIn("turno", a)
+        self.assertTrue(a["desc"].startswith("Inferencia 1"))
+        self.assertIn("hermana", b["desc"])
+
+    def test_aria_habla_de_inferencias(self):
+        aria = claudit._aria_write(claudit._items_write(self.FILAS))
+        self.assertIn("inferencia 1:", aria)
+        self.assertNotIn("turno", aria)
+
+    def test_template_y_tooltip_dicen_inferencia(self):
+        tpl = (Path(claudit.__file__).parent / "report.html").read_text("utf-8")
+        sec = tpl.split("Cache-write — por inferencia")[1].split("</section>")[0]
+        self.assertIn("Una barra por inferencia", sec)
+        self.assertNotIn("'Turno '", tpl)
+        self.assertIn("'Inferencia '", tpl)
+
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1465,10 +1465,12 @@ def _items_write(filas):
     for i, f in enumerate(filas):
         ep = _ts_epoch(f.get("ts"))
         sibling = prev is not None and ep is not None and (ep - prev) < _UMBRAL_HERMANA_S
+        rol = ("hermana: tool-call encadenado del mismo turno" if sibling
+               else "arranque de turno (tras tu prompt o una pausa)")
         items.append({
-            "turno": i + 1, "value": f["write"], "hora": _hora_local(f.get("ts")),
+            "inferencia": i + 1, "value": f["write"], "hora": _hora_local(f.get("ts")),
             "sibling": sibling,
-            "desc": f"Turno {i + 1}: tokens nuevos escritos al cache ese turno.",
+            "desc": f"Inferencia {i + 1} · {rol}. Tokens nuevos escritos al cache en esta llamada a la API.",
         })
         if ep is not None:
             prev = ep
@@ -1484,9 +1486,9 @@ def _aria_write(items):
     if not items:
         return "Cache-write por inferencia: sin datos."
     pico = max(items, key=lambda it: it["value"])
-    partes = [f'turno {it["turno"]}: {tok(it["value"])} tok' for it in items]
-    return (f"Cache-write por inferencia a lo largo de {len(items)} turnos, "
-            f"pico de {tok(pico['value'])} tok en el turno {pico['turno']}. Detalle: "
+    partes = [f'inferencia {it["inferencia"]}: {tok(it["value"])} tok' for it in items]
+    return (f"Cache-write a lo largo de {len(items)} inferencias, "
+            f"pico de {tok(pico['value'])} tok en la inferencia {pico['inferencia']}. Detalle: "
             + ", ".join(partes) + ".")
 
 

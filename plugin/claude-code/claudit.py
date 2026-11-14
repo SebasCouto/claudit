@@ -342,27 +342,99 @@ def es_prompt(entry):
     return isinstance(c, list) and not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c)
 
 
-def turnos(lineas):
-    """Un dict por prompt humano: inferencias que genero (message.id distintos) y
-    tool_use por nombre. Fuente unica para el 1.er turno y las tool calls por prompt."""
-    out = []
+def _turnos_detalle(lineas):
+    """Fuente unica del loop: un dict por prompt humano con sus inferencias en orden
+    ({"read", "tools": [nombres]}), agrupadas por message.id (una respuesta = N lineas)."""
+    out, por_id = [], {}
     for entry in lineas:
         if es_prompt(entry):
-            out.append({"ts": entry.get("timestamp"), "inferencias": 0, "tools": {}, "_ids": set()})
+            out.append({"ts": entry.get("timestamp"), "infs": []})
+            por_id = {}
             continue
-        if not out or not usage_de(entry):
+        u = usage_de(entry)
+        if not out or not u:
             continue
-        t = out[-1]
         mid = (entry.get("message") or {}).get("id") or id(entry)
-        if mid not in t["_ids"]:
-            t["_ids"].add(mid)
-            t["inferencias"] += 1
-        for b in blocks_de(entry):
-            if isinstance(b, dict) and b.get("type") == "tool_use":
-                t["tools"][b.get("name") or "?"] = t["tools"].get(b.get("name") or "?", 0) + 1
-    for t in out:
-        del t["_ids"]
+        inf = por_id.get(mid)
+        if inf is None:
+            inf = por_id[mid] = {"read": u.get("cache_read_input_tokens", 0) or 0, "tools": []}
+            out[-1]["infs"].append(inf)
+        inf["tools"] += [b.get("name") or "?" for b in blocks_de(entry)
+                         if isinstance(b, dict) and b.get("type") == "tool_use"]
     return out
+
+
+def turnos(lineas):
+    """Un dict por prompt humano: inferencias que genero y tool_use por nombre."""
+    out = []
+    for t in _turnos_detalle(lineas):
+        tools = {}
+        for i in t["infs"]:
+            for n in i["tools"]:
+                tools[n] = tools.get(n, 0) + 1
+        out.append({"ts": t["ts"], "inferencias": len(t["infs"]), "tools": tools})
+    return out
+
+
+TOOLS_SUBAGENTE = {"Task", "Agent"}
+# Umbrales de las palancas del loop (fuente unica: aca, no en el HTML).
+LOOP_MIN_CON_TOOLS = 5        # debajo de esto el % de paralelismo es ruido
+LOOP_PARALELO_BAJO = 0.20     # < 20% de inferencias con tools lanzan 2+ a la vez
+LOOP_CADENA_LARGA = 5         # 5+ inferencias seguidas de UNA sola tool en un turno
+LOOP_TURNO_LARGO = 10         # turno con 10+ inferencias sin delegar
+LOOP_HERMANAS_ALTO = 0.50     # > 50% del cache-read se va en hermanas
+
+
+def loop_agentico(lineas):
+    """Como se encadena el trabajo dentro de cada turno. None si no hay inferencias."""
+    det = [t for t in _turnos_detalle(lineas) if t["infs"]]
+    if not det:
+        return None
+    infs = [i for t in det for i in t["infs"]]
+    por_turno = [len(t["infs"]) for t in det]
+    con_tools = [i for i in infs if i["tools"]]
+    paralelas = sum(1 for i in con_tools if len(i["tools"]) >= 2)
+    cadena, cadena_turno = 0, None
+    for n, t in enumerate(det, 1):
+        run = 0
+        for i in t["infs"]:
+            run = run + 1 if len(i["tools"]) == 1 else 0
+            if run > cadena:
+                cadena, cadena_turno = run, n
+    mx = max(por_turno)
+    return {"turnos": len(det), "inferencias": len(infs), "prom": len(infs) / len(det),
+            "max": mx, "max_turno": por_turno.index(mx) + 1,
+            "con_tools": len(con_tools), "paralelas": paralelas,
+            "pct_paralelo": paralelas / len(con_tools) if con_tools else 0.0,
+            "cadena_max": cadena, "cadena_turno": cadena_turno,
+            "read_total": sum(i["read"] for i in infs),
+            "read_hermanas": sum(i["read"] for t in det for i in t["infs"][1:]),
+            "subagentes": sum(1 for i in infs for n in i["tools"] if n in TOOLS_SUBAGENTE)}
+
+
+def palancas_loop(m):
+    """Hallazgos accionables del loop, con numeros reales. Lista vacia = loop sano."""
+    if not m:
+        return []
+    out = []
+    if m["con_tools"] >= LOOP_MIN_CON_TOOLS and m["pct_paralelo"] < LOOP_PARALELO_BAJO:
+        out.append(f"Solo {m['pct_paralelo']:.0%} de las inferencias con tools lanzan 2+ en paralelo: "
+                   "agrupar lecturas independientes en una misma inferencia ahorra un re-read del cache por tool.")
+    if m["cadena_max"] >= LOOP_CADENA_LARGA:
+        out.append(f"En el turno {m['cadena_turno']}: cadena de {m['cadena_max']} inferencias seguidas de una sola tool; "
+                   "cada eslabon re-lee todo el prefijo cacheado.")
+    pct_h = m["read_hermanas"] / m["read_total"] if m["read_total"] else 0
+    if m["subagentes"] == 0 and m["max"] >= LOOP_TURNO_LARGO and pct_h > LOOP_HERMANAS_ALTO:
+        out.append(f"{_tok0(m['read_hermanas'])} tok de cache-read ({pct_h:.0%}) en inferencias hermanas y 0 sub-agentes "
+                   f"(turno {m['max_turno']}: {m['max']} inferencias): la exploracion larga en un sub-agente no re-lee tu contexto.")
+    return out
+
+
+def linea_loop(m):
+    if not m:
+        return "Loop agentico: sin turnos"
+    return (f"Loop agentico: {m['prom']:.1f} inferencias/turno (max {m['max']} en turno {m['max_turno']}), "
+            f"{m['pct_paralelo']:.0%} paralelas, cadena max {m['cadena_max']}, {m['subagentes']} sub-agentes")
 
 
 def linea_primer_turno(ts_):
@@ -1492,6 +1564,37 @@ def _aria_write(items):
             + ", ".join(partes) + ".")
 
 
+def _loop_html(m):
+    """KPIs del loop agentico + palancas con numeros reales (o 'loop sano')."""
+    if not m:
+        return '<p class="muted">Loop agentico: sin turnos con inferencias en esta sesion.</p>'
+    cards = [
+        (f"{m['prom']:.1f}", "inferencias / turno",
+         f"Promedio de llamadas a la API por prompt tuyo. El turno mas largo fue el {m['max_turno']} con {m['max']}."),
+        (f"{m['pct_paralelo']:.0%}", "inferencias en paralelo",
+         f"{m['paralelas']} de {m['con_tools']} inferencias con tools lanzaron 2+ tools a la vez. "
+         "Cada inferencia re-lee todo el cache: menos inferencias = menos cache-read."),
+        (str(m["cadena_max"]), "cadena secuencial max",
+         "Inferencias seguidas de UNA sola tool dentro de un mismo turno (lectura exploratoria encadenada)."
+         + (f" Ocurrio en el turno {m['cadena_turno']}." if m["cadena_turno"] else "")),
+        (_tok0(m["read_hermanas"]), "cache-read en hermanas (tok)",
+         "Cache-read de las inferencias posteriores a la primera de cada turno: el costo de encadenar tool-calls."),
+        (f"{m['read_hermanas'] / m['read_total']:.0%}" if m["read_total"] else "—", "del cache-read total",
+         "Que parte del cache-read de la sesion se fue en inferencias hermanas."),
+        (str(m["subagentes"]), "sub-agentes lanzados",
+         "Tool calls Agent/Task. Un sub-agente explora en su propio contexto y no re-lee el tuyo en cada paso."),
+    ]
+    html = '<div class="metric-boxes">' + "".join(
+        f'<div class="metric" data-tip="{_esc(d)}"><strong>{_esc(v)}</strong><span>{_esc(l)}</span></div>'
+        for v, l, d in cards) + "</div>"
+    pal = palancas_loop(m)
+    if pal:
+        html += '<ul class="tips-list">' + "".join(f"<li>{_esc(p)}</li>" for p in pal) + "</ul>"
+    else:
+        html += '<p class="muted">Loop sano: sin cadenas largas ni turnos que pidan delegar.</p>'
+    return html
+
+
 def _tips_html(setup):
     """Top componentes editables del setup fijo, ordenados por tok/turno desc."""
     editables = sorted([c for c in setup["componentes"] if c["editable"]], key=lambda c: -c["tok"])[:5]
@@ -1727,6 +1830,7 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     out = out.replace("__CLAUDIT_USO__", _uso_html(metricas_uso(), metricas_uso(proyecto=proy), nombre))
     out = out.replace("__CLAUDIT_HOOKS__", _salud_hooks_html(*hooks_con_previa(jsonl, lineas))
                       + f'<p class="muted">{_esc(linea_primer_turno(turnos(lineas)))}</p>')
+    out = out.replace("__CLAUDIT_LOOP__", _loop_html(loop_agentico(lineas)))
     out = out.replace("__CLAUDIT_CURVA__", _curva_contexto_html(analisis_ventana(filas))
                       + _retomadas_html(retomadas_cache_vencida(filas)))
     out = out.replace("__CLAUDIT_ARIA_COMP__", _esc(_aria_composicion(items_comp)))
@@ -2028,6 +2132,7 @@ def main():
     imprimir_retomadas(retomadas_cache_vencida(filas))
     imprimir_salud_hooks(*hooks_con_previa(jsonl, lineas))
     print("\n" + linea_primer_turno(turnos(lineas)))
+    print(linea_loop(loop_agentico(lineas)))
     print()
     for linea in lineas_cupo(consumo_local()):
         print(linea)

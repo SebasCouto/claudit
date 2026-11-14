@@ -1819,7 +1819,7 @@ def _salud_hooks_html(actual, avisos):
         return '<p class="muted">Sin hooks en el arranque.</p>'
     filas = "".join(
         f'<tr><td>{_esc(h["label"])}</td><td>{_tok0(h["chars"])}</td>'
-        f'<td>{"<span class=p-mark>degradado</span> " + _esc(h["motivo"]) if h["degradado"] else "ok"}</td></tr>'
+        f'<td class="h-estado">{"<span class=\"h-nok\">nOk</span> " + _esc(h["motivo"]) if h["degradado"] else "<span class=\"h-ok\">Ok</span>"}</td></tr>'
         for h in actual)
     av = "".join(f'<div class="ctx-alerta">{_esc(a["label"])} inyecta mucho menos que en la sesion previa: '
                  f'{_tok0(a["antes"])} &rarr; {_tok0(a["ahora"])} chars.</div>' for a in avisos)

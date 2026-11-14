@@ -61,7 +61,7 @@ class TestComparacion(unittest.TestCase):
     def test_texto_y_html_marcan_degradado(self):
         act = claudit.salud_hooks(arranque(hook("warning: mismatch")))
         html = claudit._salud_hooks_html(act, [])
-        self.assertIn("degradado", html)
+        self.assertIn('class="h-nok">nOk</span> warning: mismatch', html)
 
 
 class TestSesionPrevia(unittest.TestCase):
@@ -77,6 +77,15 @@ class TestSesionPrevia(unittest.TestCase):
                 os.utime(p, (ahora + i, ahora + i))
             self.assertEqual(claudit.sesion_previa(actual), vieja)
             self.assertIsNone(claudit.sesion_previa(vieja))
+
+
+class TestEstadoColoreado(unittest.TestCase):
+    def test_ok_verde_y_nok_rojo(self):
+        html = claudit._salud_hooks_html(
+            [{"label": "a", "chars": 10, "degradado": False, "motivo": ""},
+             {"label": "b", "chars": 10, "degradado": True, "motivo": "stderr"}], [])
+        self.assertIn('<span class="h-ok">Ok</span>', html)
+        self.assertIn('<span class="h-nok">nOk</span> stderr', html)
 
 
 if __name__ == "__main__":

@@ -120,7 +120,9 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .uso-chart h3{display:flex;justify-content:space-between;gap:10px;font-size:14px;}
 .uso-chart h3 span{color:var(--muted);font-weight:400;font-family:var(--font-mono);font-size:13px;}
 .uso-chart svg{width:100%;height:auto;display:block;}
-.uso-chart .bar{fill:var(--primary);} .uso-chart .hit{fill:transparent;} .uso-chart .hit:hover+.bar,.uso-chart .on{fill:var(--ink);}
+.uso-chart .area{fill:var(--primary);opacity:.16;} .uso-chart .line{fill:none;stroke:var(--primary);stroke-width:2;stroke-linejoin:round;}
+.uso-chart .hit{fill:transparent;} .uso-chart .cross{stroke:var(--muted);stroke-dasharray:3 3;}
+.uso-chart .dot{fill:var(--primary);stroke:var(--surface-2);stroke-width:2;}
 .uso-chart .grid{stroke:var(--line);stroke-width:1;} .uso-chart text{fill:var(--muted);font:12px var(--font-sans);}
 @media (max-width:760px){.uso-grid{grid-template-columns:1fr;}}
 </style>
@@ -375,23 +377,46 @@ var CLAUDIT_USO_SERIES=[
   {k:'costo', t:'Costo estimado por dia', f:function(v){return '$'+v.toFixed(2);}, tick:function(v){return '$'+Math.round(v);}}
 ];
 
-function claudinBarsSvg(dias, serie){
-  var W=600, H=190, L=44, B=24, T=10, n=dias.length, slot=(W-L)/n, bw=Math.max(2,slot-2), r=Math.min(4,bw/2);
-  var vals=dias.map(function(d){ return serie.k==='app' ? (d.prompts? d.tools/d.prompts : 0) : d[serie.k]; });
-  var top=Math.max.apply(null,vals)||1, p10=Math.pow(10,Math.floor(Math.log10(top))), fr=top/p10;
-  var max=(fr<=1?1:fr<=2?2:fr<=5?5:10)*p10, ph=H-B-T, s='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="';
-  var imax=vals.indexOf(Math.max.apply(null,vals));
-  s+=claudinEscHtml(serie.t+': maximo '+serie.f(vals[imax]||0)+' el '+dias[imax].fecha)+'">';
+function claudinMonoPath(pts){
+  // curva monotona (Fritsch-Carlson): suave como el dashboard de Claude, sin pasar por debajo de 0
+  var n=pts.length; if(n<2) return n?'M'+pts[0][0]+','+pts[0][1]:'';
+  var d=[], m=[], i;
+  for(i=0;i<n-1;i++) d.push((pts[i+1][1]-pts[i][1])/(pts[i+1][0]-pts[i][0]));
+  m[0]=d[0]; m[n-1]=d[n-2];
+  for(i=1;i<n-1;i++) m[i]=d[i-1]*d[i]<=0?0:(d[i-1]+d[i])/2;
+  for(i=0;i<n-1;i++){
+    if(d[i]===0){ m[i]=0; m[i+1]=0; continue; }
+    var a=m[i]/d[i], b=m[i+1]/d[i], h=a*a+b*b;
+    if(h>9){ var t=3/Math.sqrt(h); m[i]=t*a*d[i]; m[i+1]=t*b*d[i]; }
+  }
+  var s='M'+pts[0][0]+','+pts[0][1];
+  for(i=0;i<n-1;i++){ var dx=(pts[i+1][0]-pts[i][0])/3;
+    s+='C'+(pts[i][0]+dx)+','+(pts[i][1]+m[i]*dx)+' '+(pts[i+1][0]-dx)+','+(pts[i+1][1]-m[i+1]*dx)+' '+pts[i+1][0]+','+pts[i+1][1]; }
+  return s;
+}
+
+function claudinUsoValor(d, serie){ return serie.k==='app' ? (d.prompts? d.tools/d.prompts : 0) : d[serie.k]; }
+
+function claudinAreaSvg(dias, serie, hoy){
+  var W=600, H=190, L=44, R=8, B=24, T=10, n=dias.length, ph=H-B-T, step=(W-L-R)/Math.max(1,n-1);
+  var vista=dias.filter(function(d){ return !hoy || d.fecha<=hoy; });
+  var vals=vista.map(function(d){ return claudinUsoValor(d, serie); });
+  var top=Math.max.apply(null,vals.concat([0]))||1, p10=Math.pow(10,Math.floor(Math.log10(top))), fr=top/p10;
+  var max=(fr<=1?1:fr<=2?2:fr<=5?5:10)*p10, base=T+ph;
+  var imax=vals.indexOf(Math.max.apply(null,vals.concat([0])));
+  var s='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+claudinEscHtml(serie.t+': maximo '+serie.f(vals[imax]||0)+(vista[imax]?' el '+vista[imax].fecha:''))+'">';
   [0,.5,1].forEach(function(p){ var y=T+ph*(1-p)+.5;
-    s+='<line class="grid" x1="'+L+'" x2="'+W+'" y1="'+y+'" y2="'+y+'"/><text x="'+(L-6)+'" y="'+(y+4)+'" text-anchor="end">'+claudinEscHtml((serie.tick||serie.f)(max*p))+'</text>'; });
-  dias.forEach(function(d,i){
-    var v=vals[i], h=ph*v/max, x=L+i*slot+1, y=T+ph-h, base=T+ph, dia=+d.fecha.slice(8);
-    s+='<rect class="hit" data-i="'+i+'" x="'+(L+i*slot)+'" y="'+T+'" width="'+slot+'" height="'+ph+'"/>';
-    if(h>0){ var rr=Math.min(r,h);
-      s+='<path class="bar" d="M'+x+','+base+'V'+(y+rr)+'Q'+x+','+y+' '+(x+rr)+','+y+'H'+(x+bw-rr)+'Q'+(x+bw)+','+y+' '+(x+bw)+','+(y+rr)+'V'+base+'Z"/>'; }
-    else s+='<path class="bar"/>';
-    if(dia===1||dia%5===0) s+='<text x="'+(x+bw/2)+'" y="'+(H-6)+'" text-anchor="middle">'+dia+'</text>';
-  });
+    s+='<line class="grid" x1="'+L+'" x2="'+(W-R)+'" y1="'+y+'" y2="'+y+'"/><text x="'+(L-6)+'" y="'+(y+4)+'" text-anchor="end">'+claudinEscHtml((serie.tick||serie.f)(max*p))+'</text>'; });
+  var pts=vista.map(function(d,i){ return [+(L+i*step).toFixed(1), +(base-ph*vals[i]/max).toFixed(1)]; });
+  if(pts.length){
+    var linea=claudinMonoPath(pts);
+    s+='<path class="area" d="'+linea+'L'+pts[pts.length-1][0]+','+base+'L'+pts[0][0]+','+base+'Z"/><path class="line" d="'+linea+'"/>';
+  }
+  dias.forEach(function(d,i){ var x=L+i*step, dia=+d.fecha.slice(8);
+    if(dia===1||dia%5===0) s+='<text x="'+x+'" y="'+(H-6)+'" text-anchor="middle">'+dia+'</text>'; });
+  s+='<line class="cross" x1="0" x2="0" y1="'+T+'" y2="'+base+'" visibility="hidden"/><circle class="dot" r="4" cx="0" cy="0" visibility="hidden"/>';
+  pts.forEach(function(p,i){
+    s+='<rect class="hit" data-i="'+i+'" data-x="'+p[0]+'" data-y="'+p[1]+'" x="'+(p[0]-step/2)+'" y="'+T+'" width="'+step+'" height="'+ph+'"/>'; });
   return s+'</svg>';
 }
 
@@ -429,15 +454,17 @@ function claudinUso(){
     var charts=document.getElementById('uso-charts');
     charts.innerHTML=CLAUDIT_USO_SERIES.map(function(s){
       var tot=s.avg ? (t.acciones_por_prompt||0) : s.k==='sesiones' ? t.sesiones : m.dias.reduce(function(a,d){return a+d[s.k];},0);
-      return '<div class="uso-chart" data-k="'+s.k+'"><h3>'+s.t+'<span>'+(s.avg?'prom. ':s.k==='sesiones'?'distintas ':'total ')+claudinEscHtml(s.f(tot))+'</span></h3>'+claudinBarsSvg(m.dias,s)+'</div>';
+      return '<div class="uso-chart" data-k="'+s.k+'"><h3>'+s.t+'<span>'+(s.avg?'prom. ':s.k==='sesiones'?'distintas ':'total ')+claudinEscHtml(s.f(tot))+'</span></h3>'+claudinAreaSvg(m.dias,s,u.hoy)+'</div>';
     }).join('');
     charts.querySelectorAll('.uso-chart').forEach(function(c){
       var s=CLAUDIT_USO_SERIES.filter(function(x){return x.k===c.dataset.k;})[0];
+      var cross=c.querySelector('.cross'), dot=c.querySelector('.dot');
       c.querySelectorAll('.hit').forEach(function(h){
-        h.addEventListener('mousemove',function(e){ var d=m.dias[+h.dataset.i];
-          var v=s.k==='app'?(d.prompts?d.tools/d.prompts:0):d[s.k];
+        h.addEventListener('mousemove',function(e){ var d=m.dias[+h.dataset.i], v=claudinUsoValor(d,s);
+          cross.setAttribute('x1',h.dataset.x); cross.setAttribute('x2',h.dataset.x); cross.setAttribute('visibility','visible');
+          dot.setAttribute('cx',h.dataset.x); dot.setAttribute('cy',h.dataset.y); dot.setAttribute('visibility','visible');
           claudinShowTip(e.clientX,e.clientY,d.fecha,s.t+': '+s.f(v)+' · '+d.sesiones+' sesiones · '+d.prompts+' prompts'); });
-        h.addEventListener('mouseleave',claudinHideTip);
+        h.addEventListener('mouseleave',function(){ claudinHideTip(); cross.setAttribute('visibility','hidden'); dot.setAttribute('visibility','hidden'); });
       });
     });
     document.getElementById('uso-skills').innerHTML=claudinUsoTabla('Skills',['Skill','Usos'],m.skills.slice(0,15));

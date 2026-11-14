@@ -72,12 +72,12 @@ summary{cursor:pointer;font-weight:600;}
 details p{color:var(--muted);font-size:13px;line-height:1.6;margin:10px 0 0;}
 footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .metric[data-tip]{cursor:help;}
-#claudit-tip{position:fixed;z-index:50;max-width:300px;padding:10px 12px;background:var(--surface-2);
+#claudit-tip{position:fixed;z-index:50;max-width:380px;padding:10px 12px;background:var(--surface-2);
   border:1px solid var(--line);border-radius:10px;color:var(--ink);font:13px/1.4 var(--font-sans);
   box-shadow:0 8px 28px rgba(0,0,0,.45);pointer-events:none;opacity:0;transition:opacity .12s;}
 #claudit-tip.on{opacity:1;}
 #claudit-tip strong{display:block;font-size:13px;margin-bottom:4px;}
-#claudit-tip span{color:var(--muted);}
+#claudit-tip span{color:var(--muted);white-space:pre-line;}
 .setup-tree{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px;min-width:520px;}
 .setup-tree th{text-align:right;color:var(--muted);font-weight:600;font-size:12px;padding:7px 12px;border-bottom:1px solid var(--line);white-space:nowrap;}
 .setup-tree th:first-child{text-align:left;}
@@ -167,7 +167,9 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 }
 @media (prefers-reduced-motion:reduce){.sidenav,.sn-item{transition:none;}}
 .uso-pager{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin:4px 0 6px;}
-.uso-ambito{margin-right:auto;color:var(--muted);font-size:13px;}
+.uso-ambito-box{margin-right:auto;display:inline-flex;align-items:center;}
+.h-ayuda[hidden]{display:none;}
+.uso-ambito{color:var(--muted);font-size:13px;}
 .uso-ambito select{margin-left:8px;background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:5px 12px;font:600 13px var(--font-sans);}
 .uso-pager strong{min-width:150px;text-align:center;font-size:15px;}
 .uso-chart .setup-tree{min-width:0;}
@@ -707,6 +709,13 @@ function claudinUso(){
     var lbl=new Date(+p[0],+p[1]-1,1).toLocaleDateString('es',{month:'long',year:'numeric'});
     document.getElementById('uso-mes').textContent=lbl.charAt(0).toUpperCase()+lbl.slice(1);
     prev.disabled=idx===0; next.disabled=idx===u.meses.length-1;
+    var bp=document.getElementById('uso-proyectos'), ps=m.proyectos||[];
+    if(bp){
+      bp.hidden=(sel&&sel.value!=='todos')||!ps.length;
+      bp.dataset.tipTitle=ps.length+(ps.length===1?' proyecto':' proyectos')+' en el mes';
+      bp.dataset.tip=ps.map(function(x){return x.nombre+' · '+x.sesiones+(x.sesiones===1?' sesión':' sesiones')+' · '+x.prompts+' prompts · $'+x.costo.toFixed(2);}).join('\n');
+      bp.setAttribute('aria-label','Proyectos incluidos en el mes: '+ps.map(function(x){return x.nombre;}).join(', '));
+    }
     var kpis=[['Lineas aceptadas',t.lineas.toLocaleString(),'Lineas agregadas por Edit/Write aplicados en el mes.'],
       ['Accept rate',pct(t.accept_rate),t.aceptadas+' ediciones aplicadas · '+t.rechazadas+' rechazadas.'],
       ['Acciones por prompt',t.acciones_por_prompt==null?'—':t.acciones_por_prompt.toFixed(1),t.tools.toLocaleString()+' tool calls / '+t.prompts.toLocaleString()+' prompts. Mas alto = mas trabajo delegado.'],

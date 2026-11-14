@@ -150,5 +150,44 @@ class TestUsoPorProyecto(unittest.TestCase):
         self.assertEqual(datos["nombre"], "-p-a")
 
 
+class TestProyectosDelMes(unittest.TestCase):
+    """Con "Todos los proyectos", que proyectos suman el mes (para el tooltip del ambito)."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        raiz = Path(cls.tmp.name)
+        con_cwd = [dict(e, cwd="/home/ana/repos/cache-report") for e in SESION_A]
+        for nombre, lineas in (("-home-ana-repos-cache-report", con_cwd), ("-home-ana-repos-b", SESION_B)):
+            (raiz / nombre).mkdir()
+            fx.escribir(raiz / nombre, lineas, "s.jsonl")
+        cls.u = claudit.metricas_uso(raiz=raiz, ahora=AHORA)
+        cls.nov = next(m for m in cls.u["meses"] if m["mes"] == "2026-11")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_proyectos_por_costo_con_sesiones_y_prompts(self):
+        p = self.nov["proyectos"]
+        self.assertEqual([x["nombre"] for x in p], ["cache-report", "b"])
+        self.assertEqual((p[0]["sesiones"], p[0]["prompts"]), (1, 2))
+        self.assertEqual((p[1]["sesiones"], p[1]["prompts"]), (1, 1))
+        self.assertGreater(p[0]["costo"], p[1]["costo"])
+
+    def test_solo_el_nombre_corto_nunca_la_ruta_ni_el_usuario(self):
+        crudo = json.dumps(self.nov["proyectos"])
+        self.assertNotIn("/home", crudo)
+        self.assertNotIn("ana", crudo)  # ni del cwd ni del nombre de la carpeta (fallback sin cwd)
+
+    def test_tooltip_de_proyectos_junto_al_selector(self):
+        html = claudit._uso_html(self.u, self.u, "cache-report")
+        self.assertIn('class="h-ayuda" id="uso-proyectos"', html)
+        self.assertIn('aria-label="Proyectos incluidos en el mes"', html)
+
+    def test_el_template_llena_el_tooltip_al_cambiar_de_mes(self):
+        tpl = (fx.PLUGIN / "report.html").read_text("utf-8")
+        self.assertIn("getElementById('uso-proyectos')", tpl)
+
+
 if __name__ == "__main__":
     unittest.main()

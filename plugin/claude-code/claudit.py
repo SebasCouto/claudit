@@ -1414,7 +1414,16 @@ def _fecha_local(ts):
 
 
 def _mes_vacio():
-    return {"dias": {}, "skills": {}, "conectores": {}, "modelos": {}, "aceptadas": 0, "rechazadas": 0}
+    return {"dias": {}, "skills": {}, "conectores": {}, "modelos": {}, "aceptadas": 0, "rechazadas": 0,
+            "proyectos": {}}
+
+
+def _nombre_proyecto(lineas, carpeta):
+    """Solo la ultima carpeta del cwd, nunca la ruta (el HTML se comparte y la ruta trae el
+    usuario). Sin cwd, el ultimo tramo de la carpeta codificada (la ruta con / -> -)."""
+    cwd = next((e["cwd"] for e in lineas if isinstance(e, dict) and isinstance(e.get("cwd"), str)
+                and e["cwd"].strip("\\/")), "")
+    return re.split(r"[\\/]", cwd.rstrip("\\/"))[-1] if cwd else (carpeta.rstrip("-").rsplit("-", 1)[-1] or "?")
 
 
 def _dia_vacio():
@@ -1428,6 +1437,11 @@ def _acumular_uso(meses, lineas, sesion, sidechain):
         m = meses.setdefault(fecha[:7], _mes_vacio())
         return m, m["dias"].setdefault(fecha, _dia_vacio())
 
+    nom_proy = _nombre_proyecto(lineas, sesion[0])
+
+    def del_proy(m):
+        return m["proyectos"].setdefault(sesion[0], {"nombre": nom_proy, "sesiones": set(), "prompts": 0, "costo": 0.0})
+
     for f in leer_inferencias(lineas):
         fecha = _fecha_local(f["ts"])
         if not fecha:
@@ -1437,6 +1451,9 @@ def _acumular_uso(meses, lineas, sesion, sidechain):
         d["tokens"] += f["read"] + f["write"] + f["input"] + f["output"]
         d["costo"] += costo(f)
         d["sesiones"].add(sesion)
+        p = del_proy(m)
+        p["costo"] += costo(f)
+        p["sesiones"].add(sesion)
         if f.get("model") and f["model"] != "<synthetic>":
             m["modelos"][f["model"]] = m["modelos"].get(f["model"], 0) + 1
     nombres = {}
@@ -1448,6 +1465,9 @@ def _acumular_uso(meses, lineas, sesion, sidechain):
         if es_prompt(e) and not sidechain:
             d["prompts"] += 1
             d["sesiones"].add(sesion)
+            p = del_proy(m)
+            p["prompts"] += 1
+            p["sesiones"].add(sesion)
             for cmd in _skills_de_prompt(e):
                 m["skills"][cmd] = m["skills"].get(cmd, 0) + 1
         for b in blocks_de(e):
@@ -1568,7 +1588,10 @@ def _cerrar_mes(mes, m, hoy):
             "skills": sorted(m["skills"].items(), key=lambda x: (-x[1], x[0])),
             "conectores": sorted(({"servidor": s, **v} for s, v in m["conectores"].items()),
                                  key=lambda x: -(x["lecturas"] + x["escrituras"])),
-            "modelos": sorted(m["modelos"].items(), key=lambda x: -x[1])}
+            "modelos": sorted(m["modelos"].items(), key=lambda x: -x[1]),
+            "proyectos": sorted(({"nombre": p["nombre"], "sesiones": len(p["sesiones"]), "prompts": p["prompts"],
+                                  "costo": round(p["costo"], 4)} for p in m.get("proyectos", {}).values()),
+                                key=lambda x: (-x["costo"], x["nombre"]))}
 
 
 def metricas_uso(raiz=None, ahora=None, meses=USO_MESES, proyecto=None):
@@ -2434,7 +2457,9 @@ def _uso_html(u, up=None, nombre=None):
                 '<option value="todos">Todos los proyectos</option>'
                 f'<option value="proyecto"{"" if up["meses"] else " disabled"}>'
                 f'Este proyecto · {_esc(nombre)}</option></select></label>' if nombre else "")
-    return (f'<div class="uso-pager">{selector}<button class="btn uso-prev" type="button" aria-label="Mes anterior">‹</button>'
+    ayuda = ('<button type="button" class="h-ayuda" id="uso-proyectos" data-tip-title="Proyectos del mes" '
+             'data-tip="" aria-label="Proyectos incluidos en el mes">?</button>')
+    return (f'<div class="uso-pager"><span class="uso-ambito-box">{selector}{ayuda}</span><button class="btn uso-prev" type="button" aria-label="Mes anterior">‹</button>'
             '<strong id="uso-mes" aria-live="polite"></strong>'
             '<button class="btn uso-next" type="button" aria-label="Mes siguiente">›</button></div>'
             '<div class="metric-boxes" id="uso-kpis"></div>'

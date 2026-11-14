@@ -215,16 +215,29 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .vs-tabla td:first-child small{display:block;font-size:11px;}
 .vs-sw,.cal-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--c);margin-right:6px;vertical-align:middle;}
 .vs-cal h4{margin:8px 0 6px;font-size:13px;font-weight:600;}
-.cal-leyenda{list-style:none;display:flex;flex-wrap:wrap;gap:4px 14px;margin:0 0 10px;padding:0;font-size:12px;color:var(--muted);}
-.cal-meses{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:14px;}
-.cal-mes{border-collapse:collapse;font-size:11px;width:100%;}
-.cal-mes caption{text-align:left;font-weight:600;color:var(--ink);font-size:12px;padding-bottom:4px;}
-.cal-mes th{color:var(--muted);font-weight:500;padding:2px 0;}
-.cal-mes td{text-align:center;color:var(--muted);padding:3px 0;height:30px;vertical-align:top;}
-.cal-mes td.cal-ev{color:var(--ink);font-weight:600;cursor:help;border-radius:4px;background:var(--surface-2);}
+.vs-filtros{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 16px;}
+.vs-filtros button{border:1px solid var(--line);border-radius:999px;background:var(--surface-2);color:var(--ink);padding:5px 12px;font-size:13px;cursor:pointer;}
+.vs-filtros button[aria-pressed="true"]{border-color:var(--primary);color:var(--primary);font-weight:600;}
+.vs-filtros button:focus-visible,.cal-nav button:focus-visible{outline:2px solid var(--primary);outline-offset:2px;}
+.vs-tabla tr.vs-grupo th{padding-top:14px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line);}
+.vs-tabla tr.vs-off{opacity:.4;}
+.vs-cal [hidden],.vs-fechas[hidden]{display:none!important;}
+.cal-nav{display:flex;align-items:center;gap:12px;margin:0 0 8px;}
+.cal-nav span{min-width:120px;text-align:center;font-size:18px;font-weight:600;}
+.cal-nav button{width:32px;height:32px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);font-size:18px;line-height:1;cursor:pointer;}
+.cal-nav button:disabled{opacity:.35;cursor:default;}
+.cal-mes{border-collapse:separate;border-spacing:4px;font-size:14px;width:100%;table-layout:fixed;}
+.cal-mes caption{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);}
+.cal-mes th{color:var(--muted);font-weight:500;font-size:12px;padding:4px 0;}
+.cal-mes td{text-align:center;color:var(--muted);padding:6px 0;height:54px;vertical-align:top;border-radius:6px;}
+.cal-mes td.cal-ev{color:var(--ink);font-weight:600;cursor:help;background:var(--surface-2);}
 .cal-ev:focus-visible{outline:2px solid var(--primary);outline-offset:1px;}
-.cal-dots{display:flex;justify-content:center;gap:2px;margin-top:2px;}
-.cal-dots .cal-dot{width:6px;height:6px;margin:0;box-shadow:0 0 0 1px var(--surface-1);}
+.cal-dots{display:flex;justify-content:center;flex-wrap:wrap;gap:3px;margin-top:6px;}
+.cal-dots .cal-dot{width:8px;height:8px;margin:0;box-shadow:0 0 0 2px var(--surface-2);}
+.vs-fechas h5{margin:14px 0 6px;font-size:13px;font-weight:600;}
+.vs-fechas ul{list-style:none;margin:0;padding:0;font-size:13px;}
+.vs-fechas li{padding:3px 0;border-bottom:1px solid var(--line);}
+.vs-fechas time{font-family:var(--font-mono);font-size:12px;margin-right:8px;}
 .sk-lista tr[hidden]{display:none;}
 .sk-pag{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;}
 .sk-xlsx{margin-left:auto;border-radius:6px;}
@@ -900,11 +913,43 @@ function claudinSkills(){
   });
   ver();
 }
+function claudinVersiones(){
+  var raiz=document.querySelector('#u-skills .vs-cal'); if(!raiz) return;
+  var meses=[].slice.call(raiz.querySelectorAll('.cal-mes')), nav=raiz.querySelector('.cal-nav');
+  var btns=nav.querySelectorAll('button[data-dir]'), lbl=nav.querySelector('[aria-live]'), idx=meses.length-1, sel='';
+  var u=document.getElementById('u-skills'), filtros=[].slice.call(u.querySelectorAll('.vs-filtros button'));
+  var fechas=[].slice.call(u.querySelectorAll('.vs-fechas')), filas=[].slice.call(u.querySelectorAll('.vs-tabla tr[data-c]'));
+  var dias=[].slice.call(raiz.querySelectorAll('td[data-tip-title]'));
+  function mes(i){
+    idx=Math.min(Math.max(0,i),meses.length-1);
+    meses.forEach(function(t,j){t.hidden=j!==idx;});
+    lbl.textContent=meses[idx].dataset.nombre; btns[0].disabled=idx===0; btns[1].disabled=idx===meses.length-1;
+  }
+  function filtrar(){
+    dias.forEach(function(td){
+      var dots=[].slice.call(td.querySelectorAll('.cal-dot')), on=dots.filter(function(d){return !sel||d.dataset.c===sel;});
+      dots.forEach(function(d){d.hidden=on.indexOf(d)<0;});
+      td.classList.toggle('cal-ev',on.length>0);
+      if(on.length){ var tip=on.map(function(d){return d.dataset.t;}).join(' · ');
+        td.dataset.tip=tip; td.tabIndex=0; td.setAttribute('aria-label',td.dataset.tipTitle+': '+tip); }
+      else { td.removeAttribute('data-tip'); td.removeAttribute('tabindex'); td.removeAttribute('aria-label'); }
+    });
+    filas.forEach(function(tr){tr.classList.toggle('vs-off',!!sel&&tr.dataset.c!==sel);});
+    fechas.forEach(function(f){f.hidden=f.dataset.c!==sel;});
+    var ultimo=-1; meses.forEach(function(t,j){ if(t.querySelector('td.cal-ev')) ultimo=j; });
+    mes(ultimo<0?meses.length-1:ultimo);
+  }
+  btns.forEach(function(b){b.addEventListener('click',function(){mes(idx+(+b.dataset.dir));});});
+  filtros.forEach(function(b){b.addEventListener('click',function(){
+    sel=b.dataset.c; filtros.forEach(function(x){x.setAttribute('aria-pressed',String(x===b));}); filtrar();});});
+  mes(idx);
+}
 claudinPerfil();
 claudinSkills();
+claudinVersiones();
 claudinSesionUso();
-document.querySelectorAll('.cal-ev[data-tip]').forEach(function(c){
-  function ver(e){ var r=c.getBoundingClientRect(); claudinShowTip(e&&e.clientX||r.right, e&&e.clientY||r.top, c.dataset.tipTitle||'', c.dataset.tip); }
+document.querySelectorAll('.vs-cal td[data-tip-title]').forEach(function(c){
+  function ver(e){ if(!c.dataset.tip) return; var r=c.getBoundingClientRect(); claudinShowTip(e&&e.clientX||r.right, e&&e.clientY||r.top, c.dataset.tipTitle||'', c.dataset.tip); }
   c.addEventListener('mousemove',ver); c.addEventListener('focus',function(){ver();});
   c.addEventListener('mouseleave',claudinHideTip); c.addEventListener('blur',claudinHideTip);
 });

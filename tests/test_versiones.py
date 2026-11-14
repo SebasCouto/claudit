@@ -43,6 +43,10 @@ class TestComponentes(unittest.TestCase):
         self.assertEqual(self.orden, ["Claude Code", "claudit", "engram", "otro",
                                       "aegyros", "gentleman-programming"])
 
+    def test_cada_componente_trae_su_tipo_para_agrupar(self):
+        tipos = {n: c["tipo"] for n, c in self.comps.items()}
+        self.assertEqual((tipos["Claude Code"], tipos["claudit"], tipos["aegyros"]), ("claude-code", "plugin", "skills"))
+
     def test_claude_code_desde_transcripts(self):
         cc = self.comps["Claude Code"]
         self.assertEqual((cc["version"], cc["desde"], cc["actualizada"]), ("2.1.320", "2026-11-03", "2026-11-12"))
@@ -80,14 +84,16 @@ class TestVersionBinario(unittest.TestCase):
             self.assertEqual(claudit._version_binario(["engram", "version"]), "1.19.0")
 
 
-def comp(nombre, eventos, version="1.0"):
+def comp(nombre, eventos, version="1.0", tipo="plugin"):
     return {"nombre": nombre, "version": version, "desde": eventos[0][0], "actualizada": eventos[-1][0],
-            "fuente": "x", "eventos": eventos}
+            "fuente": "x", "eventos": eventos, "tipo": tipo}
 
 
 class TestVersionesHtml(unittest.TestCase):
     def setUp(self):
-        self.comps = [comp("Claude Code", [("2026-09-30", "2.1.282"), ("2026-11-13", "2.1.323")], "2.1.323"),
+        self.comps = [comp("aegyros", [("2026-10-05", "3 skills instaladas/actualizadas")], "sin versión", "skills"),
+                      comp("Claude Code", [("2026-09-30", "2.1.282"), ("2026-11-13", "2.1.323")], "2.1.323",
+                           "claude-code"),
                       comp("engram", [("2026-11-13", "instalado 0.1.0")])]
         self.html = claudit._versiones_html(self.comps)
 
@@ -120,13 +126,53 @@ class TestVersionesHtml(unittest.TestCase):
     def test_sin_componentes_no_dibuja_nada(self):
         self.assertEqual(claudit._versiones_html([]), "")
 
+    def test_tabla_agrupada_claude_code_plugins_skills(self):
+        tabla = self.html.split('class="setup-tree vs-tabla"')[1].split("</table>")[0]
+        i_cc, i_pl, i_sk = (tabla.index(f'scope="colgroup">{g}<') for g in ("Claude Code", "Plugins", "Skills"))
+        self.assertLess(i_cc, i_pl)
+        self.assertLess(i_pl, tabla.index("engram"), i_sk)
+        self.assertLess(i_pl, i_sk)
+        self.assertLess(i_sk, tabla.index("aegyros"))
+
+    def test_color_sigue_al_componente_en_el_orden_agrupado(self):
+        self.assertIn('style="--c:var(--vs-1)" data-c="0" data-t="Claude Code 2.1.323"', self.html)
+
+    def test_un_solo_mes_visible_el_ultimo_con_navegacion(self):
+        meses = self.html.split('class="cal-mes"')[1:]
+        self.assertEqual([" hidden" in m.split(">")[0] for m in meses], [True, True, False])
+        self.assertIn(">nov 2026<", meses[-1])
+        nav = self.html.split('class="cal-nav"')[1].split("</div>")[0]
+        self.assertIn('data-dir="-1"', nav)
+        self.assertIn('data-dir="1"', nav)
+        self.assertIn('aria-live="polite"', nav)
+
+    def test_filtro_por_componente(self):
+        filtros = self.html.split('class="vs-filtros"')[1].split("</div>")[0]
+        self.assertIn('data-c="" aria-pressed="true">Todos', filtros)
+        self.assertEqual(filtros.count("<button"), 4)
+        self.assertIn('data-c="1" aria-pressed="false"><i class="vs-sw" style="--c:var(--vs-2)"></i>engram', filtros)
+
+    def test_puntos_llevan_componente_y_texto_para_filtrar_el_tooltip(self):
+        self.assertIn('data-c="1" data-t="engram instalado 0.1.0"', self.html)
+
+    def test_fechas_listadas_por_componente_ocultas_hasta_filtrar(self):
+        fechas = self.html.split('class="vs-fechas" data-c="0" hidden')[1].split("</ul>")[0]
+        self.assertIn("2026-09-30", fechas)
+        self.assertIn("2.1.282", fechas)
+        self.assertIn("2026-11-13", fechas)
+
 
 class TestTemplate(unittest.TestCase):
     def test_tokens_de_color_y_tooltip_del_calendario(self):
         tpl = (fx.PLUGIN / "report.html").read_text("utf-8")
         for i in range(1, 9):
             self.assertIn(f"--vs-{i}:", tpl)
-        self.assertIn(".cal-ev[data-tip]", tpl)
+        self.assertIn(".vs-cal td[data-tip-title]", tpl)
+
+    def test_navega_meses_y_filtra_por_componente(self):
+        tpl = (fx.PLUGIN / "report.html").read_text("utf-8")
+        self.assertIn("function claudinVersiones", tpl)
+        self.assertIn("claudinVersiones();", tpl)
 
 
 if __name__ == "__main__":

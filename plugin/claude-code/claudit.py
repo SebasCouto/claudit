@@ -787,10 +787,10 @@ def _clave_version(v):
     return [int(x) if x.isdigit() else 0 for x in re.split(r"[.\-]", v)]
 
 
-def _componente(nombre, version, eventos, fuente):
+def _componente(nombre, version, eventos, fuente, tipo):
     eventos = sorted(eventos)
     return {"nombre": nombre, "version": version, "desde": eventos[0][0], "actualizada": eventos[-1][0],
-            "fuente": fuente, "eventos": eventos}
+            "fuente": fuente, "eventos": eventos, "tipo": tipo}
 
 
 def _plugins_versiones():
@@ -812,7 +812,7 @@ def _plugins_versiones():
             eventos.append((i["lastUpdated"][:10], f"actualizado {v}"))
         binario = _version_binario(BINARIOS_VERSION[nombre]) if nombre in BINARIOS_VERSION else ""
         version = f"{binario} · plugin {v}" if binario else v
-        comps.append(_componente(nombre, version, eventos, "installed_plugins.json"))
+        comps.append(_componente(nombre, version, eventos, "installed_plugins.json", "plugin"))
     return comps
 
 
@@ -836,7 +836,7 @@ def _autores_versiones():
         version = (vs[0] if len(vs) == 1 else "por skill: " + ", ".join(vs)) if vs else "sin versión"
         eventos = [(d, f"{n} skill{'s' if n > 1 else ''} instalada{'s' if n > 1 else ''}/actualizada{'s' if n > 1 else ''}")
                    for d, n in g["dias"].items()]
-        comps.append(_componente(autor, version, eventos, "~/.claude/skills (fecha de los archivos)"))
+        comps.append(_componente(autor, version, eventos, "~/.claude/skills (fecha de los archivos)", "skills"))
     return comps
 
 
@@ -847,7 +847,7 @@ def componentes_versiones(listados):
     vs = versiones_cc(listados)
     if vs:
         comps.append(_componente("Claude Code", vs[-1][0], [(d, v) for v, d in vs],
-                                 "transcripts (primer dia de cada version)"))
+                                 "transcripts (primer dia de cada version)", "claude-code"))
     return comps + _plugins_versiones() + _autores_versiones()
 
 
@@ -2055,8 +2055,9 @@ def _color_vs(i):
 
 
 def _calendario_html(comps):
-    """Un mini-mes por mes entre el primer y el ultimo evento; cada dia con eventos lleva un punto
-    del color de cada componente y el detalle en tooltip (hover y foco)."""
+    """Un mes grande por vez (el ultimo con eventos; flechas para ir y volver), del primer al ultimo
+    evento; cada dia con eventos lleva un punto del color de cada componente y el detalle en tooltip.
+    Cada punto trae su componente (data-c) y su texto (data-t) para que el filtro recalcule el tip."""
     por_dia = {}
     for i, c in enumerate(comps):
         for dia, txt in c["eventos"]:
@@ -2066,9 +2067,10 @@ def _calendario_html(comps):
     y1, m1 = map(int, min(por_dia)[:7].split("-"))
     y2, m2 = map(int, max(por_dia)[:7].split("-"))
     meses = [(y, m) for y in range(y1, y2 + 1) for m in range(1, 13) if (y1, m1) <= (y, m) <= (y2, m2)]
+    meses = meses[-CAL_MAX_MESES:]
     cal = calendar.Calendar(firstweekday=0)
     out = []
-    for y, m in meses[-CAL_MAX_MESES:]:
+    for n, (y, m) in enumerate(meses):
         filas = []
         for semana in cal.monthdayscalendar(y, m):
             celdas = []
@@ -2081,36 +2083,64 @@ def _calendario_html(comps):
                     celdas.append(f"<td>{d}</td>")
                 else:
                     tip = _esc(" · ".join(t for _, t in ev))
-                    puntos = "".join(f'<i class="cal-dot" style="--c:{_color_vs(i)}"></i>' for i, _ in ev)
+                    puntos = "".join(f'<i class="cal-dot" style="--c:{_color_vs(i)}" data-c="{i}" data-t="{_esc(t)}"></i>'
+                                     for i, t in ev)
                     celdas.append(f'<td class="cal-ev" tabindex="0" data-tip-title="{dia}" data-tip="{tip}" '
                                   f'aria-label="{dia}: {tip}">{d}<span class="cal-dots">{puntos}</span></td>')
             filas.append("<tr>" + "".join(celdas) + "</tr>")
-        out.append(f'<table class="cal-mes"><caption>{MESES_CORTOS[m - 1]} {y}</caption><thead><tr>'
+        nombre = f"{MESES_CORTOS[m - 1]} {y}"
+        oculto = "" if n == len(meses) - 1 else " hidden"
+        out.append(f'<table class="cal-mes" data-nombre="{nombre}"{oculto}><caption>{nombre}</caption><thead><tr>'
                    + "".join(f'<th scope="col">{x}</th>' for x in "LMMJVSD")
                    + "</tr></thead><tbody>" + "".join(filas) + "</tbody></table>")
-    leyenda = "".join(f'<li><i class="cal-dot" style="--c:{_color_vs(i)}"></i>{_esc(c["nombre"])}</li>'
-                      for i, c in enumerate(comps))
-    return (f'<div class="vs-cal"><h4>Calendario de versiones en esta máquina</h4>'
-            f'<ul class="cal-leyenda">{leyenda}</ul><div class="cal-meses">{"".join(out)}</div></div>')
+    nav = ('<div class="cal-nav"><button type="button" data-dir="-1" aria-label="Mes anterior">‹</button>'
+           f'<span aria-live="polite">{MESES_CORTOS[meses[-1][1] - 1]} {meses[-1][0]}</span>'
+           '<button type="button" data-dir="1" aria-label="Mes siguiente" disabled>›</button></div>')
+    fechas = "".join(
+        f'<div class="vs-fechas" data-c="{i}" hidden><h5>Fechas de {_esc(c["nombre"])} en esta máquina</h5><ul>'
+        + "".join(f'<li><time>{_esc(d)}</time> {_esc(t)}</li>' for d, t in c["eventos"]) + "</ul></div>"
+        for i, c in enumerate(comps))
+    return (f'<div class="vs-cal"><h4>Calendario de versiones en esta máquina</h4>{nav}'
+            f'<div class="cal-meses">{"".join(out)}</div>{fechas}</div>')
+
+
+GRUPOS_VS = (("claude-code", "Claude Code"), ("plugin", "Plugins"), ("skills", "Skills"))
+
+
+def _tipo_vs(c):
+    t = c.get("tipo")
+    return t if t in dict(GRUPOS_VS) else "plugin"
 
 
 def _versiones_html(comps):
     """Versiones vistas: version propia de cada componente (la que declara quien lo publica) y desde
-    cuando corre en ESTA maquina, con calendario mes a mes."""
+    cuando corre en ESTA maquina, agrupadas Claude Code / Plugins / Skills, con filtro por componente
+    y calendario de un mes por vez."""
     if not comps:
         return ""
-    fila = lambda i, c: (f'<tr><td><i class="vs-sw" style="--c:{_color_vs(i)}"></i>{_esc(c["nombre"])}'
-                         f'<small class="muted">{_esc(c["fuente"])}</small></td><td>{_esc(c["version"])}</td>'
-                         f'<td>{_esc(c["desde"])}</td><td>{_esc(c["actualizada"])}</td></tr>')
+    orden = [t for t, _ in GRUPOS_VS]
+    comps = sorted(comps, key=lambda c: orden.index(_tipo_vs(c)))  # estable: respeta el orden de cada grupo
+    filas = []
+    for i, c in enumerate(comps):
+        if i == 0 or _tipo_vs(comps[i - 1]) != _tipo_vs(c):
+            filas.append(f'<tr class="vs-grupo"><th colspan="4" scope="colgroup">{dict(GRUPOS_VS)[_tipo_vs(c)]}</th></tr>')
+        filas.append(f'<tr data-c="{i}"><td><i class="vs-sw" style="--c:{_color_vs(i)}"></i>{_esc(c["nombre"])}'
+                     f'<small class="muted">{_esc(c["fuente"])}</small></td><td>{_esc(c["version"])}</td>'
+                     f'<td>{_esc(c["desde"])}</td><td>{_esc(c["actualizada"])}</td></tr>')
     tabla = ('<table class="setup-tree vs-tabla"><thead><tr><th>Componente</th><th>Versión</th>'
              '<th>En esta máquina desde</th><th>Última actualización</th></tr></thead><tbody>'
-             + "".join(fila(i, c) for i, c in enumerate(comps)) + "</tbody></table>")
+             + "".join(filas) + "</tbody></table>")
+    filtros = ('<div class="vs-filtros" role="group" aria-label="Filtrar versiones por componente">'
+               '<button type="button" data-c="" aria-pressed="true">Todos</button>'
+               + "".join(f'<button type="button" data-c="{i}" aria-pressed="false"><i class="vs-sw" '
+                         f'style="--c:{_color_vs(i)}"></i>{_esc(c["nombre"])}</button>' for i, c in enumerate(comps))
+               + "</div>")
     return ('<h3>Versiones vistas</h3><p class="muted">La versión es la que declara cada componente '
             '(igual en todas las máquinas); las fechas son de <strong>esta</strong> máquina: transcripts '
             'para Claude Code, <code>installed_plugins.json</code> para plugins y fecha de los archivos para '
             'las skills de <code>~/.claude/skills</code>, agrupadas por <code>author</code>. "sin versión" = '
-            'el componente no declara una.</p>'
-            f'<div class="vs-grid"><div class="vs-col">{tabla}</div>{_calendario_html(comps)}</div>')
+            'el componente no declara una. Filtrá por componente para ver solo sus fechas.</p>'
+            f'{filtros}<div class="vs-grid"><div class="vs-col">{tabla}</div>{_calendario_html(comps)}</div>')
 
 
 def _skills_del_setup_html(setup):

@@ -179,6 +179,18 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .uso-chart .dot{fill:var(--primary);stroke:var(--surface-2);stroke-width:2;}
 .uso-chart .grid{stroke:var(--line);stroke-width:1;}
 .us-kpis{grid-template-columns:repeat(4,minmax(0,1fr));}
+.pf-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;}
+.pf-head .muted{margin:0;}
+.pf-badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-weight:600;font-size:13px;border:1px solid currentColor;}
+.pf-peligroso{color:var(--bad);} .pf-moderado{color:var(--mid);} .pf-saludable{color:var(--good);}
+.pf-form{display:flex;gap:16px;flex-wrap:wrap;margin-top:16px;}
+.pf-form label{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--ink);}
+.pf-form small{color:var(--muted);}
+.pf-form input{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);width:180px;max-width:100%;}
+.pf-meter{height:8px;border-radius:999px;background:var(--line);margin-top:16px;overflow:hidden;}
+.pf-meter i{display:block;height:100%;width:0;border-radius:999px;background:var(--primary);transition:width .2s;}
+.pf-meter-txt{margin:6px 0 0;font-size:13px;color:var(--muted);}
+.pf-politicas{margin-top:18px;}
 @media (max-width:760px){.us-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}}
 .us-s1{--c:#3987e5;} .us-s2{--c:#d95926;} .us-s3{--c:#199e70;}
 .uso-chart .ml{fill:none;stroke:var(--c);stroke-width:2;stroke-linejoin:round;} .uso-chart .mdot{fill:var(--c);stroke:var(--surface-2);stroke-width:2;}
@@ -221,6 +233,7 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
     </div>
     <div class="sn-group" data-group="uso">
       <a class="sn-head" data-tab="uso" href="#uso"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Uso</a>
+      <a class="sn-item" data-tab="uso" href="#u-perfil">Perfil de uso</a>
       <a class="sn-item" data-tab="uso" href="#u-sesion">Cómo se usó la sesión</a>
       <a class="sn-item" data-tab="uso" href="#u-cupo">Cupo 5 h</a>
       <a class="sn-item" data-tab="uso" href="#u-mes">Uso por mes</a>
@@ -294,7 +307,8 @@ __CLAUDIT_SETUP_ROWS__
     <div class="chart-pct"><strong>__CLAUDIT_WRITE_PCT__%</strong><span>del total de tokens</span></div>
   </div>
   <p class="muted">Una barra por inferencia (cada llamada a la API). Un turno = tu prompt hasta la respuesta: una barra azul seguida de sus naranjas. Altura = tokens nuevos escritos al cache en esa inferencia (el contenido que entro y se cacheo). El pico grande esta al arranque (se cachea el setup); despues cada inferencia escribe solo el delta nuevo (tu mensaje o el resultado de una tool). Aparecen picos EXTRA cuando el cache se re-crea: tras un /compact, tras un hueco de inactividad &gt;__CLAUDIT_TTL__ (el cache expira, TTL) o al entrar contenido nuevo grande.</p>
-  <div class="legend"><span><i style="background:var(--primary)"></i>Arranque de turno &mdash; tu prompt (o la primera llamada tras una pausa &ge;30 s)</span><span><i style="background:var(--mid)"></i>Inferencias hermanas &mdash; tool-calls encadenados del mismo turno (&lt;30 s): re-leen el cache ya escrito y escriben solo el resultado de la tool</span></div>
+  <div class="legend"><span><i style="background:var(--primary)"></i>Arranque de turno &mdash; tu prompt (o la primera llamada tras una pausa &ge;30 s)</span><span><i style="background:var(--mid)"></i>Inferencias hermanas &mdash; tool-calls encadenados del mismo turno (&lt;30 s): re-leen el cache ya escrito y escriben solo el resultado de la tool</span><span><i style="background:var(--bad)"></i>&#9888; Peligrosa &mdash; ese write (escribirlo + re-leerlo en cada inferencia siguiente) costo &ge;1% del cupo de 5 h; sin el % cargado, la mas cara</span></div>
+  <p class="muted" id="pf-write-nota">Cargar el % de Account &amp; Usage en Uso &rarr; Perfil de uso para ver cuanto tiempo de cupo resto cada write.</p>
   <div class="chart-wrap">
     <canvas id="claudit-chart-write" height="220" role="img" aria-label="__CLAUDIT_ARIA_WRITE__"></canvas>
   </div>
@@ -340,6 +354,14 @@ __CLAUDIT_CURVA__
 </div>
 
 <div class="tab-panel" role="region" aria-label="Uso" data-panel="uso" hidden>
+<section class="card" id="u-perfil">
+  <div class="chart-head">
+    <h2>Perfil de uso — cuanto aguanta el cupo de 5 h</h2>
+  </div>
+  <p class="muted">El riesgo real no es el costo: es quedarse sin cupo antes del reset y no poder usar la sesion hasta que vuelva. El contexto que crece es la causa (cada inferencia re-lee el prefijo entero) y el bloqueo es la consecuencia. El % de la cuenta no se lee por ninguna via soportada: se carga a mano desde Account &amp; Usage. Con ese dato el reporte escala el consumo local (ultimos 30 min) a % de cupo y proyecta cuando se agota. Supone que todo el uso del bloque es de esta maquina.</p>
+__CLAUDIT_PERFIL__
+</section>
+
 <section class="card" id="u-sesion">
   <div class="chart-head">
     <h2>Cómo se usó la sesión — turno a turno</h2>
@@ -453,11 +475,13 @@ function claudinDrawBarsV(canvasId, dataId){
   var c=el.getContext('2d'); c.setTransform(dpr,0,0,dpr,0,0); c.clearRect(0,0,W,H);
   var max=Math.max.apply(null,items.map(function(i){return i.value;}))||1;
   var padBottom=26, padTop=10, plotH=H-padBottom-padTop, slot=W/items.length, bw=Math.max(2,slot-4);
-  var cols=[];
+  var cols=[], pel=claudinPeligro(items);
   items.forEach(function(it,k){
-    var h=plotH*(it.value/max), x=k*slot+2;
-    c.fillStyle=claudinTok(it.sibling?'mid':'primary'); c.fillRect(x,padTop+plotH-h,bw,Math.max(1,h));
-    cols.push({x0:k*slot, x1:(k+1)*slot, inferencia:it.inferencia, hora:it.hora||'', value:it.value||0, desc:it.desc||''});
+    var h=plotH*(it.value/max), x=k*slot+2, pk=pel[k];
+    c.fillStyle=claudinTok(pk&&pk.pel?'bad':it.sibling?'mid':'primary'); c.fillRect(x,padTop+plotH-h,bw,Math.max(1,h));
+    var extra=!(pk&&pk.pel)?'':(pk.pct==null?' \u26a0 La mas cara de la sesion: escribirla y re-leerla en cada inferencia siguiente fue el write que mas cupo consumio.'
+      :' \u26a0 Peligrosa: costo '+pk.pct.toFixed(1)+'% del cupo de 5 h'+(pk.min!=null?' (~'+Math.round(pk.min)+' min de cupo al ritmo actual)':'')+'.');
+    cols.push({x0:k*slot, x1:(k+1)*slot, inferencia:it.inferencia, hora:it.hora||'', value:it.value||0, desc:(it.desc||'')+extra});
   });
   c.strokeStyle=claudinTok('line'); c.beginPath(); c.moveTo(0,padTop+plotH+0.5); c.lineTo(W,padTop+plotH+0.5); c.stroke();
   c.fillStyle=claudinTok('muted'); c.font='11px '+claudinTok('font-sans'); c.textBaseline='top';
@@ -479,6 +503,70 @@ function claudinDrawBarsV(canvasId, dataId){
     });
     el.addEventListener('mouseleave', function(){ claudinHideTip(); });
   }
+}
+
+// Perfil de uso: el % de la cuenta lo carga el usuario (Account & Usage); con el se escala
+// el consumo local a % de cupo, se proyecta el bloqueo y se marcan los writes peligrosos.
+var CLAUDIT_PF=null;
+function claudinPeligro(items){
+  var r=items.map(function(){return null;});
+  if(CLAUDIT_PF){
+    items.forEach(function(it,k){
+      var pct=CLAUDIT_PF.pct*(it.costo_inducido||0)/CLAUDIT_PF.usd;
+      r[k]={pel:pct>=CLAUDIT_PF.umbral, pct:pct, min:CLAUDIT_PF.ritmo>0?pct/CLAUDIT_PF.ritmo:null};
+    });
+    return r;
+  }
+  var m=0, mi=-1;
+  items.forEach(function(it,k){ if((it.costo_inducido||0)>m){ m=it.costo_inducido; mi=k; } });
+  if(mi>=0) r[mi]={pel:true, pct:null};
+  return r;
+}
+function claudinPerfil(){
+  var el=document.getElementById('claudit-data-perfil'); if(!el) return;
+  var d; try{ d=JSON.parse(el.textContent); }catch(e){ return; }
+  var inPct=document.getElementById('pf-pct'), inReset=document.getElementById('pf-reset');
+  var NOM={peligroso:'⚠ Peligroso', moderado:'◐ Moderado', saludable:'✓ Saludable'}, ORD=['saludable','moderado','peligroso'];
+  var clave='claudit-pf-'+Math.round(d.ahora);
+  function nivel(v,c){ return v>=c[0]?'peligroso':v>=c[1]?'moderado':'saludable'; }
+  function peor(a,b){ return ORD.indexOf(a)>=ORD.indexOf(b)?a:b; }
+  function hhmm(ep){ var t=new Date(ep*1000); return ('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2); }
+  function dur(min){ min=Math.round(min); var h=Math.floor(min/60), m=min%60; return (h?h+' h ':'')+m+' min'; }
+  function set(id,v){ var x=document.getElementById(id); if(x) x.textContent=v; }
+  function resetEp(){
+    var v=inReset.value; if(!v) return d.reset||null;
+    var p=v.split(':'), t=new Date(d.ahora*1000); t.setHours(+p[0],+p[1],0,0);
+    var ep=t.getTime()/1000; return ep<=d.ahora?ep+86400:ep;
+  }
+  function calc(){
+    var pct=parseFloat(inPct.value), ok=!isNaN(pct)&&pct>=0&&pct<=100, rEp=resetEp();
+    var niv=nivel(d.ctx_pct,d.cortes.contexto), motivo='Contexto al '+Math.round(d.ctx_pct)+'% de la ventana.';
+    if(d.limites){ niv='peligroso'; motivo='Hubo '+d.limites+' evento(s) de limite en este bloque de 5 h. '+motivo; }
+    var nota='Cargar el % de Account & Usage en Uso → Perfil de uso para ver cuanto tiempo de cupo resto cada write.';
+    CLAUDIT_PF=null; ['pf-k-proy','pf-k-agota','pf-k-bloqueo'].forEach(function(i){ set(i,'—'); });
+    document.getElementById('pf-fill').style.width=(ok?pct:0)+'%';
+    set('pf-meter-txt', ok?pct+'% usado'+(rEp?' · se resetea a las '+hhmm(rEp):''):'Cargar el % para verlo como en Account & Usage.');
+    if(ok && d.usd>0 && rEp){
+      var ritmo=pct/d.usd*d.usd_reciente/d.min_reciente, minReset=Math.max(0,(rEp-d.ahora)/60);
+      var proy=pct+ritmo*minReset, agota=ritmo>0?(100-pct)/ritmo:Infinity, bloqueo=Math.max(0,minReset-agota);
+      niv=peor(niv,nivel(proy,d.cortes.cupo));
+      set('pf-k-proy',Math.round(proy)+'%');
+      set('pf-k-agota',isFinite(agota)&&agota<minReset?hhmm(d.ahora+agota*60):'no se agota');
+      set('pf-k-bloqueo',bloqueo>0?dur(bloqueo):'0 min');
+      motivo+=' Cupo proyectado al reset: '+Math.round(proy)+'% (ritmo '+ritmo.toFixed(2)+'%/min en los ultimos '+Math.round(d.min_reciente)+' min).'
+        +(bloqueo>0?' A este ritmo se agota a las '+hhmm(d.ahora+agota*60)+' y quedan ~'+dur(bloqueo)+' sin sesion: conviene guardar estado y compactar o abrir una sesion nueva.':' Llega al reset con margen.');
+      nota='Con '+pct+'% usado: '+(bloqueo>0?'el cupo se agota a las '+hhmm(d.ahora+agota*60)+' (~'+dur(bloqueo)+' bloqueado hasta el reset). ':'el cupo llega al reset. ')
+        +'En rojo, los writes que costaron ≥'+d.umbral_inferencia+'% del cupo cada uno.';
+      CLAUDIT_PF={pct:pct, ritmo:ritmo, usd:d.usd, umbral:d.umbral_inferencia};
+    }
+    var b=document.getElementById('pf-badge'); b.className='pf-badge pf-'+niv; b.textContent=NOM[niv];
+    set('pf-motivo',motivo); set('pf-write-nota',nota);
+    try{ if(ok) localStorage.setItem(clave,String(pct)); }catch(e){}
+    claudinDrawBarsV('claudit-chart-write','claudit-data-write');
+  }
+  try{ var g=localStorage.getItem(clave); if(g!==null) inPct.value=g; }catch(e){}
+  inPct.addEventListener('input',calc); inReset.addEventListener('input',calc);
+  calc();
 }
 
 function claudinDrawAll(){
@@ -705,6 +793,7 @@ window.addEventListener('resize',claudinDrawAll);
 claudinDrawAll();
 claudinWireMetrics();
 claudinUso();
+claudinPerfil();
 claudinSesionUso();
 document.querySelectorAll('.h-ayuda[data-tip]').forEach(function(b){
   function ver(e){ var r=b.getBoundingClientRect(); claudinShowTip(e&&e.clientX||r.right, e&&e.clientY||r.top, b.dataset.tipTitle||'', b.dataset.tip); }

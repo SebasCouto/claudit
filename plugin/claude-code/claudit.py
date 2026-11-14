@@ -1057,6 +1057,18 @@ def imprimir_retomadas(eventos):
 
 
 VENTANA_CUPO_H = 5
+# Minutos recientes con los que se mide el ritmo de consumo del cupo.
+MIN_RITMO = 30
+# Perfil de uso: (peligroso desde, moderado desde). Cupo = % proyectado al reset;
+# contexto = % de la ventana usado en la ultima inferencia (70 = regla de compact).
+CORTES_PERFIL = {"cupo": (100, 60), "contexto": (70, 40)}
+# Un cache-write es peligroso si por si solo (escritura + sus relecturas) costo >= este % del cupo.
+UMBRAL_INFERENCIA_PCT = 1
+
+
+def nivel_perfil(valor, cortes):
+    peligro, moderado = cortes
+    return "peligroso" if valor >= peligro else "moderado" if valor >= moderado else "saludable"
 
 
 def _es_limite(entry):
@@ -1073,11 +1085,13 @@ def consumo_local(raiz=None, ahora=None, horas=VENTANA_CUPO_H):
     raiz = raiz or HOME / ".claude" / "projects"
     ahora = ahora if ahora is not None else time.time()
     desde = ahora - horas * 3600
+    previo = ahora - 2 * horas * 3600  # para ubicar el inicio del bloque en curso
     toks = usd_tot = 0.0
     sesiones, proyectos, limites = set(), set(), []
+    eventos, t_limites = [], []
     for jsonl in (raiz.rglob("*.jsonl") if raiz.is_dir() else []):
         try:
-            if jsonl.stat().st_mtime < desde:
+            if jsonl.stat().st_mtime < previo:
                 continue
             lineas = parsear_lineas(jsonl)
         except OSError:
@@ -1085,6 +1099,8 @@ def consumo_local(raiz=None, ahora=None, horas=VENTANA_CUPO_H):
         activa = False
         for f in leer_inferencias(lineas):
             t = _ts_epoch(f["ts"])
+            if t is not None and previo <= t <= ahora:
+                eventos.append((t, costo(f)))
             if t is not None and desde <= t <= ahora:
                 toks += f["read"] + f["write"] + f["input"] + f["output"]
                 usd_tot += costo(f)
@@ -1093,6 +1109,7 @@ def consumo_local(raiz=None, ahora=None, horas=VENTANA_CUPO_H):
             t = _ts_epoch(e.get("timestamp")) if _es_limite(e) else None
             if t is not None and desde <= t <= ahora:
                 limites.append(_hora_local(e["timestamp"]))
+                t_limites.append(t)
         if activa:
             rel = jsonl.relative_to(raiz).parts
             proyectos.add(rel[0])
@@ -1103,7 +1120,38 @@ def consumo_local(raiz=None, ahora=None, horas=VENTANA_CUPO_H):
             "sesiones": {"valor": len(sesiones), "fuente": "observed"},
             "proyectos": {"valor": len(proyectos), "fuente": "observed"},
             "limites": {"valor": limites, "fuente": "observed"},
-            "cupo_cuenta": {"valor": None, "fuente": "unknown"}}
+            "cupo_cuenta": {"valor": None, "fuente": "unknown"},
+            "bloque": _consumo_bloque(eventos, t_limites, ahora, horas)}
+
+
+def bloque_5h(epochs, ahora, horas=VENTANA_CUPO_H):
+    """(inicio, reset) del bloque de cupo en curso, o None si no hay uno activo.
+    Un bloque arranca con el primer uso tras vencer el anterior y dura `horas`."""
+    inicio = None
+    for t in sorted(epochs):
+        if t > ahora:
+            break
+        if inicio is None or t >= inicio + horas * 3600:
+            inicio = t
+    if inicio is None or ahora >= inicio + horas * 3600:
+        return None
+    return inicio, inicio + horas * 3600
+
+
+def _consumo_bloque(eventos, t_limites, ahora, horas):
+    """USD del bloque en curso y de los ultimos MIN_RITMO min: con el % que el usuario
+    lee en Account & Usage, el reporte escala USD -> % de cupo (ritmo y bloqueo)."""
+    b = bloque_5h([t for t, _ in eventos], ahora, horas)
+    if not b:
+        return None
+    inicio, reset = b
+    minutos = max(1.0, min(MIN_RITMO, (ahora - inicio) / 60))
+    return {"inicio": inicio, "reset": reset,
+            "usd": sum(u for t, u in eventos if t >= inicio),
+            "usd_reciente": sum(u for t, u in eventos if t >= ahora - minutos * 60),
+            "min_reciente": minutos,
+            "limites": sum(1 for t in t_limites if t >= inicio),
+            "fuente": "estimated"}
 
 
 def lineas_cupo(c):
@@ -1664,6 +1712,8 @@ def _hora_local(ts):
 # tool-calls encadenados (hermana): comparten el cache re-escrito, no son un
 # evento de write nuevo. Se colorean distinto para no leer 1 evento como N.
 _UMBRAL_HERMANA_S = 30
+# Caida del contexto entre dos inferencias que delata un /compact (queda < 70%).
+COMPACT_CAIDA = 0.7
 
 
 def _ts_epoch(ts):
@@ -1676,16 +1726,55 @@ def _ts_epoch(ts):
         return None
 
 
-def _items_write(filas):
+def _ctx_tok(f):
+    return f.get("read", 0) + f.get("write", 0) + f.get("input", 0)
+
+
+def _es_compact(antes, ahora):
+    return antes.get("read", 0) > 0 and _ctx_tok(ahora) < COMPACT_CAIDA * _ctx_tok(antes)
+
+
+def _es_reescritura(antes, ahora):
+    """Cache vencida (TTL): el prefijo entero vuelve a escribirse sin achicarse."""
+    return antes.get("read", 0) > 0 and ahora.get("write", 0) >= 0.5 * _ctx_tok(ahora)
+
+
+def _costos_inducidos(filas, desde=None):
+    """USD que cada cache-write termina costando: escribirlo + re-leerlo en cada
+    inferencia posterior hasta que el prefijo se reinicia (/compact: el contexto cae
+    mas de un 30%; el auto-compact real deja ~50%). Es lo que esa inferencia le resto al cupo. Con `desde`
+    (inicio del bloque de 5 h) solo cuenta lo consumido dentro del bloque."""
+    en = [desde is None or (_ts_epoch(f.get("ts")) or 0) >= desde for f in filas]
+    n = len(filas)
+    fin = [n] * n  # primera inferencia que ya no re-lee lo escrito en i
+    for j in range(n - 1, 0, -1):
+        compact = _es_compact(filas[j - 1], filas[j]) or _es_reescritura(filas[j - 1], filas[j])
+        fin[j - 1] = j if compact else fin[j]
+    lectura = [precios(f.get("model"))["cache_read"] / 1e6 if en[j] else 0.0 for j, f in enumerate(filas)]
+    acum = [0.0] * (n + 1)
+    for j in range(n - 1, -1, -1):
+        acum[j] = acum[j + 1] + lectura[j]
+    escribir = lambda f: f.get("w5m", f.get("write", 0)) * precios(f.get("model"))["cache_write_5m"] / 1e6 \
+        + f.get("w1h", 0) * precios(f.get("model"))["cache_write_1h"] / 1e6
+    return [escribir(f) * en[i] + f.get("write", 0) * (acum[i + 1] - acum[fin[i]])
+            for i, f in enumerate(filas)]
+
+
+def _items_write(filas, desde=None):
     items, prev = [], None
+    inducidos = _costos_inducidos(filas, desde)
     for i, f in enumerate(filas):
         ep = _ts_epoch(f.get("ts"))
         sibling = prev is not None and ep is not None and (ep - prev) < _UMBRAL_HERMANA_S
-        rol = ("hermana: tool-call encadenado del mismo turno" if sibling
+        rol = ("re-escritura tras un auto-compact: el resumen + el setup vuelven a entrar al cache"
+               if i and _es_compact(filas[i - 1], f) else
+               "cache vencida re-escrita: el prefijo entero vuelve a entrar al cache"
+               if i and _es_reescritura(filas[i - 1], f) else
+               "hermana: tool-call encadenado del mismo turno" if sibling
                else "arranque de turno (tras tu prompt o una pausa)")
         items.append({
             "inferencia": i + 1, "value": f["write"], "hora": _hora_local(f.get("ts")),
-            "sibling": sibling,
+            "sibling": sibling, "costo_inducido": inducidos[i],
             "desc": f"Inferencia {i + 1} · {rol}. Tokens nuevos escritos al cache en esta llamada a la API.",
         })
         if ep is not None:
@@ -1972,6 +2061,47 @@ def _cupo_html(c):
             f'<th>procedencia</th></tr></thead><tbody>{trs}</tbody></table>')
 
 
+_NOMBRE_PERFIL = {"peligroso": "Peligroso", "moderado": "Moderado", "saludable": "Saludable"}
+_ICONO_PERFIL = {"peligroso": "\u26a0", "moderado": "\u25d0", "saludable": "\u2713"}
+
+
+def _perfil_html(b, ctx_pct, ahora):
+    """Perfil de uso. Sin el % de la cuenta, el perfil sale del contexto (y de un
+    rate_limit observado); el JS lo recalcula al cargar el % de Account & Usage."""
+    nivel = nivel_perfil(ctx_pct, CORTES_PERFIL["contexto"])
+    motivo = f"Contexto al {ctx_pct:.0f}% de la ventana."
+    if b and b["limites"]:
+        nivel, motivo = "peligroso", f"Hubo {b['limites']} evento(s) de limite en este bloque de 5 h. " + motivo
+    if not b:
+        motivo += " (sin bloque de 5 h activo: no hay consumo reciente para proyectar)."
+    reset = datetime.fromtimestamp(b["reset"]).strftime("%H:%M") if b else ""
+    (cp, cm), (xp, xm) = CORTES_PERFIL["cupo"], CORTES_PERFIL["contexto"]
+    politicas = "".join(
+        f'<tr><td><span class="pf-badge pf-{n}">{_ICONO_PERFIL[n]} {_NOMBRE_PERFIL[n]}</span></td><td>{c}</td><td>{x}</td></tr>'
+        for n, c, x in (("peligroso", f"&ge; {cp}% (bloqueo antes del reset) o un rate_limit", f"&ge; {xp}%"),
+                        ("moderado", f"{cm}% a {cp}%", f"{xm}% a {xp}%"),
+                        ("saludable", f"&lt; {cm}%", f"&lt; {xm}%")))
+    datos = dict(b or {}, ahora=ahora, ctx_pct=ctx_pct, umbral_inferencia=UMBRAL_INFERENCIA_PCT,
+                 cortes={k: list(v) for k, v in CORTES_PERFIL.items()})
+    cajas = "".join(f'<div class="metric"><strong id="{i}">{v}</strong><span>{n}</span></div>'
+                    for i, v, n in (("pf-k-ctx", f"{ctx_pct:.0f}%", "Contexto de la sesion"),
+                                    ("pf-k-proy", "—", "Cupo proyectado al reset"),
+                                    ("pf-k-agota", "—", "Se agota a las"),
+                                    ("pf-k-bloqueo", "—", "Tiempo bloqueado hasta el reset")))
+    return (f'<div class="pf-head"><span class="pf-badge pf-{nivel}" id="pf-badge">{_ICONO_PERFIL[nivel]} {_NOMBRE_PERFIL[nivel]}</span>'
+            f'<p class="muted" id="pf-motivo">{_esc(motivo)}</p></div>'
+            f'<div class="pf-form"><label>% usado del cupo 5 h <small>(el de Account &amp; Usage)</small>'
+            f'<input type="number" id="pf-pct" min="0" max="100" step="1" inputmode="decimal" placeholder="ej. 35"></label>'
+            f'<label>Se resetea a las <small>(estimado por el primer uso del bloque; editable)</small>'
+            f'<input type="time" id="pf-reset" value="{reset}"></label></div>'
+            f'<div class="pf-meter" aria-hidden="true"><i id="pf-fill"></i></div>'
+            f'<p class="pf-meter-txt" id="pf-meter-txt">Cargar el % para verlo como en Account &amp; Usage.</p>'
+            f'<div class="metric-boxes us-kpis">{cajas}</div>'
+            f'<table class="setup-tree pf-politicas"><thead><tr><th>Perfil</th><th>Cupo proyectado al reset</th>'
+            f'<th>Contexto</th></tr></thead><tbody>{politicas}</tbody></table>'
+            f'<script type="application/json" id="claudit-data-perfil">{json.dumps(datos)}</script>')
+
+
 def _uso_html(u, up=None, nombre=None):
     """Contenedores de la pestaña Uso + los meses como JSON; el JS del template dibuja
     el mes elegido con el paginador ‹ › y cambia de ambito (todos los proyectos / este
@@ -2058,7 +2188,8 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     write_pct = round(100 * acum["write"] / total_tok) if total_tok else 0
 
     items_comp = _items_composicion(comp, acum["read"])
-    items_write = _items_write(filas)
+    cupo = consumo_local()
+    items_write = _items_write(filas, (cupo["bloque"] or {}).get("inicio"))
 
     destino.parent.mkdir(parents=True, exist_ok=True)
     if destino.parent.name == ".claudit":
@@ -2077,8 +2208,10 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     out = out.replace("__CLAUDIT_TIPS__", _tips_html(setup))
     out = out.replace("__CLAUDIT_SETUP_TOTAL__", _tok0(setup["total"]))
     out = out.replace("__CLAUDIT_SETUP_ROWS__", _setup_tree_html(setup))
-    out = out.replace("__CLAUDIT_CONTEXTO__", _contexto_html(vista_contexto(lineas, filas, setup, ventana_flag)))
-    out = out.replace("__CLAUDIT_CUPO__", _cupo_html(consumo_local()))
+    ctx = vista_contexto(lineas, filas, setup, ventana_flag)
+    out = out.replace("__CLAUDIT_CONTEXTO__", _contexto_html(ctx))
+    out = out.replace("__CLAUDIT_CUPO__", _cupo_html(cupo))
+    out = out.replace("__CLAUDIT_PERFIL__", _perfil_html(cupo["bloque"], ctx["pct"], time.time()))
     proy = jsonl.parent.name
     nombre = REPO.name if jsonl.parent == dir_proyecto() else proy
     out = out.replace("__CLAUDIT_USO__", _uso_html(metricas_uso(), metricas_uso(proyecto=proy), nombre))

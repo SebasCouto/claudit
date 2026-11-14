@@ -105,10 +105,46 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .prov{font-family:var(--font-mono);font-size:12px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);}
 .prov-observed{color:var(--good);} .prov-calculated{color:var(--primary);} .prov-estimated{color:var(--mid);} .prov-unknown{color:var(--muted);}
 @media (max-width:760px){.ctx-grid{grid-template-columns:1fr;}}
-.tabs{display:flex;gap:6px;margin-top:20px;border-bottom:1px solid var(--line);}
-.tab{cursor:pointer;background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);font:600 14px var(--font-sans);padding:10px 16px;margin-bottom:-1px;}
-.tab:hover{color:var(--ink);} .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--primary);}
-.tab:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:6px;}
+.layout{display:grid;grid-template-columns:252px minmax(0,1fr);min-height:100vh;}
+.content{min-width:0;}
+.sidenav{position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column;gap:22px;
+  padding:22px 14px 18px;background:var(--surface-1);border-right:1px solid var(--line);}
+.sn-brand{display:flex;align-items:center;gap:10px;padding:2px 10px;color:var(--ink);text-decoration:none;
+  font:700 20px var(--font-sans);letter-spacing:-.03em;}
+.sn-nav{display:flex;flex-direction:column;gap:18px;}
+.sn-group{display:flex;flex-direction:column;gap:2px;}
+.sn-head{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;color:var(--muted);text-decoration:none;
+  font:600 11px var(--font-sans);letter-spacing:.09em;text-transform:uppercase;}
+.sn-head svg,.sn-toggle svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none;}
+.sn-head:hover{color:var(--ink);}
+.sn-group.on .sn-head{color:var(--ink);} .sn-group.on .sn-head svg{color:var(--primary);}
+.sn-item{position:relative;display:block;padding:7px 10px 7px 36px;border-radius:8px;color:var(--muted);
+  font-size:14px;text-decoration:none;transition:background .12s,color .12s;}
+.sn-item::before{content:"";position:absolute;left:17px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:var(--line);}
+.sn-item:hover{background:var(--surface-2);color:var(--ink);}
+.sn-item[aria-current="true"]{background:var(--surface-2);color:var(--ink);font-weight:600;}
+.sn-item[aria-current="true"]::before{left:16px;top:8px;bottom:8px;width:3px;height:auto;margin:0;border-radius:2px;background:var(--primary);}
+.sn-brand:focus-visible,.sn-head:focus-visible,.sn-item:focus-visible,.sn-toggle:focus-visible{outline:2px solid var(--primary);outline-offset:2px;}
+.sn-foot{margin-top:auto;padding:14px 10px 0;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px;color:var(--muted);font-size:12px;}
+.sn-cost{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
+.sn-cost strong{color:var(--ink);font:700 14px var(--font-mono);}
+.sn-scrim{position:fixed;inset:0;z-index:30;background:hsl(220 30% 4% / .6);}
+.topbar{display:none;}
+.card,details{scroll-margin-top:20px;}
+@media (max-width:900px){
+  .layout{grid-template-columns:minmax(0,1fr);}
+  .sidenav{position:fixed;inset:0 auto 0 0;z-index:40;width:min(280px,86vw);transform:translateX(-100%);
+    transition:transform .2s ease;box-shadow:0 0 40px hsl(220 30% 4% / .6);}
+  .sidenav.open{transform:none;}
+  .topbar{display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:20;padding:10px 16px;
+    background:var(--bg);border-bottom:1px solid var(--line);}
+  .topbar-vista{color:var(--muted);font-size:13px;margin-left:auto;}
+  .sn-toggle{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;cursor:pointer;
+    background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:10px;}
+  .card,details{scroll-margin-top:68px;}
+  main{padding:20px 16px;}
+}
+@media (prefers-reduced-motion:reduce){.sidenav,.sn-item{transition:none;}}
 .uso-pager{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin:4px 0 6px;}
 .uso-ambito{margin-right:auto;color:var(--muted);font-size:13px;}
 .uso-ambito select{margin-left:8px;background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:5px 12px;font:600 13px var(--font-sans);}
@@ -129,13 +165,50 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 </head>
 <body>
 <div id="claudit-tip" role="tooltip" aria-hidden="true"></div>
+<div class="layout">
+<aside class="sidenav" id="sidenav" aria-label="Secciones del reporte">
+  <a class="sn-brand" href="#sesion" data-tab="sesion" aria-label="claudit, ir al inicio">
+    <svg width="26" height="26" viewBox="0 0 512 512" aria-hidden="true"><rect x="60" y="300" width="82" height="150" rx="20" fill="#1fd5f9" opacity=".42"/><rect x="176" y="222" width="82" height="228" rx="20" fill="#1fd5f9" opacity=".62"/><rect x="292" y="140" width="82" height="310" rx="20" fill="#1fd5f9" opacity=".82"/><rect x="408" y="60" width="82" height="390" rx="20" fill="#1fd5f9"/></svg>
+    <span>claudit</span>
+  </a>
+  <nav class="sn-nav">
+    <div class="sn-group" data-group="sesion">
+      <a class="sn-head" data-tab="sesion" href="#sesion"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Sesión</a>
+      <a class="sn-item" data-tab="sesion" href="#s-hooks">Salud de hooks</a>
+      <a class="sn-item" data-tab="sesion" href="#s-read">Cache-read</a>
+      <a class="sn-item" data-tab="sesion" href="#s-setup">Setup fijo</a>
+      <a class="sn-item" data-tab="sesion" href="#s-write">Cache-write</a>
+      <a class="sn-item" data-tab="sesion" href="#s-tips">Prioridad de mejora</a>
+      <a class="sn-item" data-tab="sesion" href="#s-metodo">Metodología</a>
+    </div>
+    <div class="sn-group" data-group="contexto">
+      <a class="sn-head" data-tab="contexto" href="#contexto"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5-9-5zM3 13l9 5 9-5M3 17.5l9 5 9-5"/></svg>Contexto</a>
+      <a class="sn-item" data-tab="contexto" href="#c-actual">Contexto actual</a>
+      <a class="sn-item" data-tab="contexto" href="#c-curva">Por inferencia</a>
+    </div>
+    <div class="sn-group" data-group="uso">
+      <a class="sn-head" data-tab="uso" href="#uso"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Uso</a>
+      <a class="sn-item" data-tab="uso" href="#u-cupo">Cupo 5 h</a>
+      <a class="sn-item" data-tab="uso" href="#u-mes">Uso por mes</a>
+    </div>
+  </nav>
+  <div class="sn-foot">
+    <span class="sn-cost"><span>costo de la sesión</span><strong>__CLAUDIT_BADGE__</strong></span>
+    <span>MIT · @by SebasCouto</span>
+  </div>
+</aside>
+<div class="sn-scrim" hidden></div>
+
+<div class="content">
+<div class="topbar">
+  <button class="sn-toggle" type="button" aria-controls="sidenav" aria-expanded="false" aria-label="Abrir navegación"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+  <strong>claudit</strong>
+  <span class="topbar-vista" id="topbar-vista">Sesión</span>
+</div>
 <main>
 <header>
   <div class="header-top">
-    <div class="brand">
-      <svg width="44" height="44" viewBox="0 0 512 512" aria-hidden="true"><rect x="60" y="300" width="82" height="150" rx="20" fill="#1fd5f9" opacity=".42"/><rect x="176" y="222" width="82" height="228" rx="20" fill="#1fd5f9" opacity=".62"/><rect x="292" y="140" width="82" height="310" rx="20" fill="#1fd5f9" opacity=".82"/><rect x="408" y="60" width="82" height="390" rx="20" fill="#1fd5f9"/></svg>
-      <h1>claudit</h1>
-    </div>
+    <h1>Auditoría de sesión</h1>
     <span class="status">__CLAUDIT_BADGE__</span>
   </div>
   <p class="muted">__CLAUDIT_SUBTITULO__</p>
@@ -144,14 +217,8 @@ __CLAUDIT_KPIS__
   </div>
 </header>
 
-<nav class="tabs" role="tablist" aria-label="Vistas del reporte">
-  <button class="tab" role="tab" data-tab="sesion" aria-selected="true">Sesión</button>
-  <button class="tab" role="tab" data-tab="contexto" aria-selected="false">Contexto</button>
-  <button class="tab" role="tab" data-tab="uso" aria-selected="false">Uso</button>
-</nav>
-
-<div class="tab-panel" role="tabpanel" data-panel="sesion">
-<section class="card">
+<div class="tab-panel" role="region" aria-label="Sesión" data-panel="sesion">
+<section class="card" id="s-hooks">
   <div class="chart-head">
     <h2>Salud de hooks</h2>
   </div>
@@ -159,7 +226,7 @@ __CLAUDIT_KPIS__
 __CLAUDIT_HOOKS__
 </section>
 
-<section class="card">
+<section class="card" id="s-read">
   <div class="chart-head">
     <h2>Cache-read — composicion del prefijo</h2>
     <div class="chart-pct"><strong>__CLAUDIT_READ_PCT__%</strong><span>del total de tokens · lo que se reenvia cada turno</span></div>
@@ -171,7 +238,7 @@ __CLAUDIT_HOOKS__
   <script type="application/json" id="claudit-data-comp">__CLAUDIT_COMP_JSON__</script>
 </section>
 
-<section class="card">
+<section class="card" id="s-setup">
   <div class="chart-head">
     <h2>Setup fijo — desglose completo</h2>
     <div class="chart-pct"><strong>__CLAUDIT_SETUP_TOTAL__</strong><span>tok/turno · piso fijo re-leido cada turno</span></div>
@@ -187,7 +254,7 @@ __CLAUDIT_SETUP_ROWS__
   </div>
 </section>
 
-<section class="card">
+<section class="card" id="s-write">
   <div class="chart-head">
     <h2>Cache-write — por inferencia</h2>
     <div class="chart-pct"><strong>__CLAUDIT_WRITE_PCT__%</strong><span>del total de tokens</span></div>
@@ -200,7 +267,7 @@ __CLAUDIT_SETUP_ROWS__
   <script type="application/json" id="claudit-data-write">__CLAUDIT_WRITE_JSON__</script>
 </section>
 
-<section class="card">
+<section class="card" id="s-tips">
   <h2>Prioridad de mejora</h2>
   <p class="tips-intro">claudit muestra las mayores palancas por ahorro potencial por turno. Recortar, reordenar o no tocar nada es una decisión a criterio del usuario — esto es visibilidad, no una receta.</p>
   <ul class="tips-list">
@@ -208,14 +275,14 @@ __CLAUDIT_TIPS__
   </ul>
 </section>
 
-<details>
+<details class="card-det" id="s-metodo">
   <summary>Metodologia</summary>
   <p>El TOTAL de cache-read, cache-write, input y output de la sesion es el dato real que reporta la API de Anthropic (usage de cada inferencia del transcript) — no es una estimacion. El REPARTO interno del cache-read entre setup fijo, prompts, tool results y respuestas se estima por proporcion de caracteres del contenido del transcript, calibrado contra el prefijo real de la ultima inferencia. El total nunca se estima; el desglose interno si, y se declara como tal.</p>
 </details>
 </div>
 
-<div class="tab-panel" role="tabpanel" data-panel="contexto" hidden>
-<section class="card">
+<div class="tab-panel" role="region" aria-label="Contexto" data-panel="contexto" hidden>
+<section class="card" id="c-actual">
   <div class="chart-head">
     <h2>Contexto actual — como /context</h2>
   </div>
@@ -223,7 +290,7 @@ __CLAUDIT_TIPS__
 __CLAUDIT_CONTEXTO__
 </section>
 
-<section class="card">
+<section class="card" id="c-curva">
   <div class="chart-head">
     <h2>Contexto por inferencia</h2>
   </div>
@@ -232,8 +299,8 @@ __CLAUDIT_CURVA__
 </section>
 </div>
 
-<div class="tab-panel" role="tabpanel" data-panel="uso" hidden>
-<section class="card">
+<div class="tab-panel" role="region" aria-label="Uso" data-panel="uso" hidden>
+<section class="card" id="u-cupo">
   <div class="chart-head">
     <h2>Cupo — consumo local</h2>
   </div>
@@ -241,7 +308,7 @@ __CLAUDIT_CURVA__
 __CLAUDIT_CUPO__
 </section>
 
-<section class="card">
+<section class="card" id="u-mes">
   <div class="chart-head">
     <h2>Uso por mes</h2>
   </div>
@@ -252,6 +319,8 @@ __CLAUDIT_USO__
 
 <footer><span>claudit · Licencia MIT — software libre, sin garantia</span><br><span class="foot-by">@by SebasCouto</span></footer>
 </main>
+</div>
+</div>
 
 <script>
 function claudinTok(name){return getComputedStyle(document.documentElement).getPropertyValue('--'+name).trim();}
@@ -477,28 +546,59 @@ function claudinUso(){
   pintar();
 }
 
-function claudinTabs(){
-  var tabs=[].slice.call(document.querySelectorAll('.tab'));
-  function abrir(n){
-    if(!tabs.some(function(t){return t.dataset.tab===n;})) n='sesion';
-    tabs.forEach(function(t){ t.setAttribute('aria-selected', String(t.dataset.tab===n)); t.tabIndex=t.dataset.tab===n?0:-1; });
-    document.querySelectorAll('.tab-panel').forEach(function(p){ p.hidden=p.dataset.panel!==n; });
+function claudinNav(){
+  var nav=document.getElementById('sidenav'), tog=document.querySelector('.sn-toggle'), scrim=document.querySelector('.sn-scrim');
+  var links=[].slice.call(nav.querySelectorAll('a[data-tab]'));
+  var items=links.filter(function(a){return a.classList.contains('sn-item');});
+  var vistaTxt=document.getElementById('topbar-vista'), actual=null;
+  var suave=!(window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches);
+  function marcar(id){ items.forEach(function(a){ a.setAttribute('aria-current', String(a.getAttribute('href')==='#'+id)); }); }
+  function itemsDe(v){ return items.filter(function(a){return a.dataset.tab===v;}); }
+  function mostrar(v){
+    if(v===actual) return; actual=v;
+    document.querySelectorAll('.tab-panel').forEach(function(p){ p.hidden=p.dataset.panel!==v; });
+    nav.querySelectorAll('.sn-group').forEach(function(g){ g.classList.toggle('on', g.dataset.group===v); });
+    var h=nav.querySelector('.sn-head[data-tab="'+v+'"]'); if(vistaTxt&&h) vistaTxt.textContent=h.textContent;
     claudinDrawAll();                                  // los canvas ocultos miden 0: redibujar al mostrarlos
   }
-  tabs.forEach(function(t,i){
-    t.addEventListener('click', function(){ abrir(t.dataset.tab); try{history.replaceState(null,'','#'+t.dataset.tab);}catch(e){} });
-    t.addEventListener('keydown', function(e){
-      var d=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0; if(!d) return;
-      var s=tabs[(i+d+tabs.length)%tabs.length]; s.focus(); s.click();
+  function ir(hash, desplazar){
+    var id=(hash||'').replace(/^#/,''), a=links.filter(function(l){return l.getAttribute('href')==='#'+id;})[0];
+    var v=a?a.dataset.tab:'sesion'; mostrar(v);
+    var el=a&&a.classList.contains('sn-item')?document.getElementById(id):null;
+    if(desplazar){ if(el) el.scrollIntoView({behavior:suave?'smooth':'auto',block:'start'}); else window.scrollTo(0,0); }
+    var primero=itemsDe(v)[0]; marcar(el?id:(primero?primero.getAttribute('href').slice(1):''));
+  }
+  function cerrar(){ nav.classList.remove('open'); if(scrim) scrim.hidden=true; if(tog) tog.setAttribute('aria-expanded','false'); }
+  links.forEach(function(a){
+    a.addEventListener('click',function(e){
+      e.preventDefault(); var h=a.getAttribute('href'); ir(h,true);
+      try{history.replaceState(null,'',h);}catch(err){} cerrar();
     });
   });
-  abrir((location.hash||'').slice(1));
+  if(tog) tog.addEventListener('click',function(){
+    nav.classList.add('open'); if(scrim) scrim.hidden=false; tog.setAttribute('aria-expanded','true');
+    var f=nav.querySelector('.sn-group.on .sn-item[aria-current="true"]')||links[0]; if(f) f.focus();
+  });
+  if(scrim) scrim.addEventListener('click',cerrar);
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape'&&nav.classList.contains('open')){ cerrar(); if(tog) tog.focus(); } });
+  var pend=false;                                       // scroll-spy: ultima seccion cuyo tope paso el umbral
+  window.addEventListener('scroll',function(){
+    if(pend) return; pend=true;
+    requestAnimationFrame(function(){
+      pend=false; var lista=itemsDe(actual), id=null;
+      var fondo=window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-4;
+      lista.forEach(function(a){ var el=document.getElementById(a.getAttribute('href').slice(1));
+        if(el&&(fondo||el.getBoundingClientRect().top<=140)) id=el.id; });
+      if(id) marcar(id); else if(lista[0]) marcar(lista[0].getAttribute('href').slice(1));
+    });
+  },{passive:true});
+  ir(location.hash, /^#[a-z]-/.test(location.hash||''));
 }
 window.addEventListener('resize',claudinDrawAll);
 claudinDrawAll();
 claudinWireMetrics();
 claudinUso();
-claudinTabs();
+claudinNav();
 </script>
 </body>
 </html>

@@ -60,9 +60,9 @@ canvas{width:100%;display:block;}
 .tips-list .tip-sub li.tip-grupo{color:var(--ink);font-weight:600;margin-top:6px;}
 .tips-list .tip-sub li.tip-hijo{padding-left:16px;font-size:12.5px;}
 .tips-list .tip-sub li.tip-pag{justify-content:flex-start;align-items:center;gap:8px;margin-top:8px;}
-.tip-pag button{min-width:30px;height:28px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);color:var(--ink);cursor:pointer;font-size:16px;line-height:1;}
-.tip-pag button:disabled{opacity:.4;cursor:default;}
-.tip-pag button:focus-visible{outline:2px solid var(--primary);outline-offset:2px;}
+.tip-pag button,.sk-pag button:not(.sk-xlsx){min-width:30px;height:28px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);color:var(--ink);cursor:pointer;font-size:16px;line-height:1;}
+.tip-pag button:disabled,.sk-pag button:disabled{opacity:.4;cursor:default;}
+.tip-pag button:focus-visible,.sk-pag button:focus-visible{outline:2px solid var(--primary);outline-offset:2px;}
 .tip-marca{display:inline-block;min-width:28px;color:var(--bad);font-weight:700;font-family:var(--font-mono);}
 details{border:1px solid var(--line);background:var(--surface-1);border-radius:var(--radius);padding:18px 24px;margin-top:20px;}
 summary{cursor:pointer;font-weight:600;}
@@ -191,6 +191,22 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .pf-meter i{display:block;height:100%;width:0;border-radius:999px;background:var(--primary);transition:width .2s;}
 .pf-meter-txt{margin:6px 0 0;font-size:13px;color:var(--muted);}
 .pf-politicas{margin-top:18px;}
+.sk-filtros{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0;}
+.sk-filtros button,.sk-xlsx{border:1px solid var(--line);border-radius:999px;background:var(--surface-2);color:var(--ink);padding:5px 12px;font-size:13px;cursor:pointer;}
+.sk-filtros button[aria-pressed="true"]{border-color:var(--primary);color:var(--primary);font-weight:600;}
+.sk-filtros button:focus-visible,.sk-xlsx:focus-visible{outline:2px solid var(--primary);outline-offset:2px;}
+.sk-tabla{overflow-x:auto;}
+.sk-lista{font-size:13px;}
+.sk-lista th,.sk-lista td{text-align:left;padding-left:8px;padding-right:8px;}
+.sk-lista td{font-family:var(--font-sans);}
+.sk-lista td:first-child{white-space:nowrap;}
+.sk-lista .num{text-align:right;}
+.sk-lista td.num{font-family:var(--font-mono);}
+#u-skills h3{margin-top:24px;}
+.sk-lista tr[hidden]{display:none;}
+.sk-pag{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;}
+.sk-xlsx{margin-left:auto;border-radius:6px;}
+.sk-versiones{margin-top:8px;max-width:360px;}
 @media (max-width:760px){.us-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}}
 .us-s1{--c:#3987e5;} .us-s2{--c:#d95926;} .us-s3{--c:#199e70;}
 .uso-chart .ml{fill:none;stroke:var(--c);stroke-width:2;stroke-linejoin:round;} .uso-chart .mdot{fill:var(--c);stroke:var(--surface-2);stroke-width:2;}
@@ -237,6 +253,7 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
       <a class="sn-item" data-tab="uso" href="#u-sesion">Cómo se usó la sesión</a>
       <a class="sn-item" data-tab="uso" href="#u-cupo">Cupo 5 h</a>
       <a class="sn-item" data-tab="uso" href="#u-mes">Uso por mes</a>
+      <a class="sn-item" data-tab="uso" href="#u-skills">Skills</a>
     </div>
   </nav>
   <div class="sn-foot">
@@ -384,6 +401,14 @@ __CLAUDIT_CUPO__
   </div>
   <p class="muted">Metricas estilo dashboard de Claude, pero de un solo usuario y calculadas del transcript local (sub-agentes incluidos). El selector de ambito cambia entre TODOS los proyectos y solo este proyecto (esta sesion incluida). Lineas aceptadas = lineas agregadas por Edit/Write aplicados; accept rate = ediciones aplicadas / (aplicadas + rechazadas); acciones por prompt = tool calls / prompts humanos; adherencia = dias activos / dias transcurridos del mes. Costo estimado por precio de modelo.</p>
 __CLAUDIT_USO__
+</section>
+
+<section class="card" id="u-skills">
+  <div class="chart-head">
+    <h2>Skills — de donde viene cada una</h2>
+  </div>
+  <p class="muted">Todas las skills que carga el skill_listing de esta sesion, con su proveedor. Prefijo <code>anthropic-skills:</code> = Anthropic via claude.ai; prefijo <code>plugin:</code> = ese plugin; carpeta <code>~/.claude/skills</code> = el <code>author</code> de su SKILL.md, o personales globales si no lo declara (el nombre se cambia con <code>etiqueta_personales</code> en <code>~/.claude/claudit.json</code>); <code>.claude/skills</code> del repo = proyecto; el resto viene incluido con Claude Code (Anthropic). "Vista desde" es la primera vez que aparece en un transcript local: un piso, no la fecha de creacion, porque Claude Code borra los transcripts viejos.</p>
+__CLAUDIT_SKILLS__
 </section>
 </div>
 
@@ -793,7 +818,68 @@ window.addEventListener('resize',claudinDrawAll);
 claudinDrawAll();
 claudinWireMetrics();
 claudinUso();
+function claudinXlsx(rows,hoja){
+  var enc=new TextEncoder(), NS='http://schemas.openxmlformats.org/', R=NS+'officeDocument/2006/relationships';
+  var X='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  function col(i){var s='';for(i++;i>0;i=Math.floor((i-1)/26)) s=String.fromCharCode(65+(i-1)%26)+s;return s;}
+  var ult=col(rows[0].length-1), n=rows.length;
+  var hojaXml=X+'<worksheet xmlns="'+NS+'spreadsheetml/2006/main"><sheetData>'+rows.map(function(r,ri){
+    return '<row r="'+(ri+1)+'">'+r.map(function(v,ci){var ref=col(ci)+(ri+1);
+      return typeof v==='number'?'<c r="'+ref+'"><v>'+v+'</v></c>'
+        :'<c r="'+ref+'" t="inlineStr"><is><t xml:space="preserve">'+esc(v)+'</t></is></c>';}).join('')+'</row>';
+  }).join('')+'</sheetData><autoFilter ref="A1:'+ult+n+'"/></worksheet>';
+  var partes=[
+    ['[Content_Types].xml',X+'<Types xmlns="'+NS+'package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'],
+    ['_rels/.rels',X+'<Relationships xmlns="'+NS+'package/2006/relationships"><Relationship Id="rId1" Type="'+R+'/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+    ['xl/workbook.xml',X+'<workbook xmlns="'+NS+'spreadsheetml/2006/main" xmlns:r="'+R+'"><sheets><sheet name="'+esc(hoja)+'" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">\''+esc(hoja)+'\'!$A$1:$'+ult+'$'+n+'</definedName></definedNames></workbook>'],
+    ['xl/_rels/workbook.xml.rels',X+'<Relationships xmlns="'+NS+'package/2006/relationships"><Relationship Id="rId1" Type="'+R+'/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'],
+    ['xl/worksheets/sheet1.xml',hojaXml]];
+  var T=[];for(var a=0;a<256;a++){var c=a;for(var k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;T[a]=c>>>0;}
+  function crc(b){var c=0xFFFFFFFF;for(var i=0;i<b.length;i++)c=T[(c^b[i])&255]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+  function dv(len){return new DataView(new ArrayBuffer(len));}
+  var locales=[], central=[], off=0, tam=0;
+  partes.forEach(function(p){                       // zip sin compresion (store): sin librerias
+    var nom=enc.encode(p[0]), dat=enc.encode(p[1]), c=crc(dat), l=dv(30), z=dv(46);
+    [[0,0x04034b50,4],[4,20,2],[6,0x0800,2],[12,0x21,2],[14,c,4],[18,dat.length,4],[22,dat.length,4],[26,nom.length,2]]
+      .forEach(function(x){x[2]===4?l.setUint32(x[0],x[1],true):l.setUint16(x[0],x[1],true);});
+    [[0,0x02014b50,4],[4,20,2],[6,20,2],[8,0x0800,2],[14,0x21,2],[16,c,4],[20,dat.length,4],[24,dat.length,4],[28,nom.length,2],[42,off,4]]
+      .forEach(function(x){x[2]===4?z.setUint32(x[0],x[1],true):z.setUint16(x[0],x[1],true);});
+    locales.push(l.buffer,nom,dat); central.push(z.buffer,nom);
+    off+=30+nom.length+dat.length; tam+=46+nom.length;
+  });
+  var e=dv(22); e.setUint32(0,0x06054b50,true); e.setUint16(8,partes.length,true); e.setUint16(10,partes.length,true);
+  e.setUint32(12,tam,true); e.setUint32(16,off,true);
+  return new Blob(locales.concat(central,[e.buffer]),{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+function claudinSkills(){
+  var raiz=document.getElementById('u-skills'), nav=raiz&&raiz.querySelector('.sk-pag'); if(!nav) return;
+  var filas=[].slice.call(raiz.querySelectorAll('tr[data-prov]')), filtros=[].slice.call(raiz.querySelectorAll('.sk-filtros button'));
+  var por=+nav.dataset.por||12, prov='', pag=1, btns=nav.querySelectorAll('button[data-dir]');
+  var lbl=nav.querySelector('[aria-live]'), tot=nav.querySelector('.sk-total');
+  function ver(){
+    var sel=filas.filter(function(tr){return !prov||tr.dataset.prov===prov;}), total=Math.max(1,Math.ceil(sel.length/por));
+    pag=Math.min(Math.max(1,pag),total);
+    filas.forEach(function(tr){tr.hidden=true;});
+    sel.forEach(function(tr,i){tr.hidden=Math.floor(i/por)+1!==pag;});
+    lbl.textContent=pag+' / '+total; btns[0].disabled=pag===1; btns[1].disabled=pag===total;
+    tot.textContent=sel.length+' skills · A–Z';
+  }
+  filtros.forEach(function(b){b.addEventListener('click',function(){
+    prov=b.dataset.prov; pag=1; filtros.forEach(function(x){x.setAttribute('aria-pressed',String(x===b));}); ver();});});
+  btns.forEach(function(b){b.addEventListener('click',function(){pag+=+b.dataset.dir; ver();});});
+  document.getElementById('sk-xlsx').addEventListener('click',function(){
+    var d=JSON.parse(document.getElementById('claudit-data-skills').textContent);
+    var rows=[['Skill','Proveedor','Fuente','tok/turno','Vista desde','Claude Code','Versión skill']]
+      .concat(d.map(function(f){return [f.skill,f.proveedor,f.fuente,f.tok,f.desde,f.cc,f.version];}));
+    var a=document.createElement('a'); a.href=URL.createObjectURL(claudinXlsx(rows,'Skills'));
+    a.download='claudit-skills-'+new Date().toISOString().slice(0,10)+'.xlsx';
+    document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},0);
+  });
+  ver();
+}
 claudinPerfil();
+claudinSkills();
 claudinSesionUso();
 document.querySelectorAll('.h-ayuda[data-tip]').forEach(function(b){
   function ver(e){ var r=b.getBoundingClientRect(); claudinShowTip(e&&e.clientX||r.right, e&&e.clientY||r.top, b.dataset.tipTitle||'', b.dataset.tip); }

@@ -682,6 +682,99 @@ def todas_skills(txt, cpt=CHARS_POR_TOKEN):
     return sorted(items, key=lambda x: x[0].casefold())
 
 
+ETIQUETA_PERSONALES = "Personales globales"
+
+
+def etiqueta_personales():
+    """Nombre de las skills personales globales (sin `author`); configurable en ~/.claude/claudit.json."""
+    try:
+        cfg = json.loads((HOME / ".claude" / "claudit.json").read_text("utf-8"))
+        return str(cfg.get("etiqueta_personales") or ETIQUETA_PERSONALES)
+    except (OSError, ValueError, AttributeError):
+        return ETIQUETA_PERSONALES
+
+
+def _frontmatter(path):
+    """(author, version) del frontmatter de un SKILL.md; '' si no estan."""
+    try:
+        txt = path.read_text("utf-8", errors="replace")
+    except OSError:
+        return "", ""
+    partes = txt.split("---", 2)
+    front = partes[1] if txt.startswith("---") and len(partes) > 2 else ""
+    campo = lambda k: (re.search(rf"(?m)^\s*{k}:\s*[\"']?([^\"'\n]+?)[\"']?\s*$", front) or [None, ""])[1]
+    return campo("author"), campo("version")
+
+
+def fuente_skill(nombre):
+    """(proveedor, fuente, version_skill) de una skill del skill_listing."""
+    if nombre.startswith("anthropic-skills:"):
+        return "Anthropic", "claude.ai (anthropic-skills)", ""
+    if ":" in nombre:
+        plugin = nombre.split(":", 1)[0]
+        return f"Plugin {plugin}", f"plugin {plugin}", ""
+    for base, fuente in ((HOME / ".claude" / "skills", "~/.claude/skills"),
+                         (REPO / ".claude" / "skills", ".claude/skills del proyecto")):
+        md = base / nombre / "SKILL.md"
+        if md.is_file():
+            autor, version = _frontmatter(md)
+            prov = "Proyecto" if fuente.endswith("proyecto") else autor or etiqueta_personales()
+            return prov, fuente, version
+    return "Anthropic", "Claude Code (incluida)", ""
+
+
+def escanear_listados(raiz=None):
+    """[(ts, version_cc, names)] de cada skill_listing de los transcripts locales, en orden.
+    Es un piso, no un nacimiento: Claude Code borra los transcripts viejos (cleanupPeriodDays)."""
+    raiz = raiz or HOME / ".claude" / "projects"
+    out = []
+    for p in Path(raiz).rglob("*.jsonl"):
+        try:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                for linea in fh:
+                    if '"skill_listing"' not in linea:
+                        continue
+                    try:
+                        e = json.loads(linea)
+                    except ValueError:
+                        continue
+                    att, ts = e.get("attachment") or {}, e.get("timestamp") or ""
+                    if att.get("type") == "skill_listing" and ts:
+                        out.append((ts, e.get("version") or "", att.get("names") or []))
+        except OSError:
+            continue
+    return sorted(out, key=lambda x: x[0])
+
+
+def historial_skills(listados):
+    """{skill: {desde, cc}}: primera vez que aparece en un skill_listing y la version de Claude Code."""
+    primera = {}
+    for ts, version, names in listados:
+        for n in names:
+            primera.setdefault(n, {"desde": ts[:10], "cc": version})
+    return primera
+
+
+def versiones_cc(listados):
+    """[(version, primer dia visto)] de Claude Code, en el orden en que aparecieron."""
+    vistas = {}
+    for ts, version, _ in listados:
+        if version:
+            vistas.setdefault(version, ts[:10])
+    return list(vistas.items())
+
+
+def filas_skills(crudas, historial):
+    """Una fila por skill (orden de `crudas`) con proveedor, fuente, tok, desde y version."""
+    filas = []
+    for nombre, tok in crudas:
+        prov, fuente, version = fuente_skill(nombre)
+        h = historial.get(nombre) or {}
+        filas.append({"skill": nombre, "proveedor": prov, "fuente": fuente, "tok": round(tok),
+                      "desde": h.get("desde", ""), "cc": h.get("cc", ""), "version": version})
+    return filas
+
+
 def secciones_skills(txt, cpt=CHARS_POR_TOKEN, top=None):
     """Las `top` skills mas pesadas una por una y el resto agregado al final."""
     top = SKILLS_TOP if top is None else top
@@ -1831,6 +1924,52 @@ def _loop_html(m):
 SKILLS_POR_PAGINA = 12
 
 
+def _skills_html(filas, versiones):
+    """Pestana Skills: cada skill con proveedor/fuente/desde, filtros por proveedor, paginador,
+    descarga en Excel y las versiones de Claude Code vistas."""
+    if not filas:
+        return '<p class="muted">sin skill_listing en esta sesion.</p>'
+    conteo = {}
+    for f in filas:
+        conteo[f["proveedor"]] = conteo.get(f["proveedor"], 0) + 1
+    boton = lambda prov, txt, on=False: (f'<button type="button" data-prov="{_esc(prov)}" '
+                                          f'aria-pressed="{"true" if on else "false"}">{_esc(txt)}</button>')
+    filtros = ('<div class="sk-filtros" role="group" aria-label="Filtrar skills por proveedor">'
+               + boton("", f"Todas ({len(filas)})", True)
+               + "".join(boton(p, f"{p} ({n})") for p, n in sorted(conteo.items(), key=lambda x: (-x[1], x[0])))
+               + '</div>')
+    fila = lambda f: (f'<tr data-prov="{_esc(f["proveedor"])}"><td>{_esc(f["skill"])}</td>'
+                      f'<td>{_esc(f["proveedor"])}</td><td>{_esc(f["fuente"])}</td>'
+                      f'<td class="num">{_tok0(f["tok"])}</td><td>{_esc(f["desde"] or "—")}</td>'
+                      f'<td>{_esc(f["cc"] or "—")}</td><td>{_esc(f["version"] or "—")}</td></tr>')
+    tabla = ('<div class="sk-tabla"><table class="setup-tree sk-lista"><thead><tr><th>Skill</th><th>Proveedor</th>'
+             '<th>Fuente</th><th class="num">tok/turno</th><th>Vista desde</th><th>Claude Code</th>'
+             '<th>Version skill</th></tr></thead><tbody>' + "".join(fila(f) for f in filas) + '</tbody></table></div>')
+    nav = (f'<div class="sk-pag" data-por="{SKILLS_POR_PAGINA}">'
+           '<button type="button" data-dir="-1" aria-label="Pagina anterior">&lsaquo;</button>'
+           '<span aria-live="polite">1 / 1</span>'
+           '<button type="button" data-dir="1" aria-label="Pagina siguiente">&rsaquo;</button>'
+           f'<span class="muted sk-total">{len(filas)} skills · A–Z</span>'
+           '<button type="button" class="sk-xlsx" id="sk-xlsx">Descargar Excel</button></div>')
+    datos = sorted(filas, key=lambda f: (f["proveedor"].casefold(), f["skill"].casefold()))
+    js = json.dumps(datos, ensure_ascii=False).replace("</", "<\\/")
+    vers = ('<h3>Versiones de Claude Code vistas</h3><p class="muted">Primer dia en que cada version aparece '
+            'en un transcript local. Claude Code se actualiza solo salvo que <code>autoUpdates</code> este en '
+            'false; el ritmo real se ve en las fechas.</p><table class="setup-tree sk-versiones"><thead><tr>'
+            '<th>Version</th><th>Vista desde</th></tr></thead><tbody>'
+            + "".join(f"<tr><td>{_esc(v)}</td><td>{_esc(d)}</td></tr>" for v, d in versiones)
+            + '</tbody></table>') if versiones else ""
+    return (filtros + tabla + nav
+            + f'<script type="application/json" id="claudit-data-skills">{js}</script>' + vers)
+
+
+def _skills_del_setup_html(setup):
+    """Seccion Skills: las skills del skill_listing de la sesion + historial de todos los transcripts."""
+    crudas = next((c.get("crudas") or [] for c in setup["componentes"] if c.get("tipo") == "skills"), [])
+    listados = escanear_listados()
+    return _skills_html(filas_skills(crudas, historial_skills(listados)), versiones_cc(listados))
+
+
 def _tip_sub(c):
     """Sub-desglose de un tip: skills completas y paginadas (A-Z); secciones agrupadas por concepto."""
     fila = lambda t, k, cls="": (f'<li{cls}><span>{_esc(t)}</span><code>{_tok0(k)} tok</code></li>')
@@ -2211,6 +2350,7 @@ def generar_html(jsonl, lineas, filas, destino, cpt_flag=None, ventana_flag=None
     ctx = vista_contexto(lineas, filas, setup, ventana_flag)
     out = out.replace("__CLAUDIT_CONTEXTO__", _contexto_html(ctx))
     out = out.replace("__CLAUDIT_CUPO__", _cupo_html(cupo))
+    out = out.replace("__CLAUDIT_SKILLS__", _skills_del_setup_html(setup))
     out = out.replace("__CLAUDIT_PERFIL__", _perfil_html(cupo["bloque"], ctx["pct"], time.time()))
     proy = jsonl.parent.name
     nombre = REPO.name if jsonl.parent == dir_proyecto() else proy

@@ -260,7 +260,7 @@ __CLAUDIT_SETUP_ROWS__
     <div class="chart-pct"><strong>__CLAUDIT_WRITE_PCT__%</strong><span>del total de tokens</span></div>
   </div>
   <p class="muted">Una barra por inferencia (cada llamada a la API). Un turno = tu prompt hasta la respuesta: una barra azul seguida de sus naranjas. Altura = tokens nuevos escritos al cache en esa inferencia (el contenido que entro y se cacheo). El pico grande esta al arranque (se cachea el setup); despues cada inferencia escribe solo el delta nuevo (tu mensaje o el resultado de una tool). Aparecen picos EXTRA cuando el cache se re-crea: tras un /compact, tras un hueco de inactividad &gt;__CLAUDIT_TTL__ (el cache expira, TTL) o al entrar contenido nuevo grande.</p>
-  <div class="legend"><span><i style="background:var(--primary)"></i>Primera inferencia del turno &mdash; el write real de ese turno</span><span><i style="background:var(--mid)"></i>Inferencias hermanas &mdash; tool-calls encadenados del mismo turno; comparten el cache ya escrito, no son un write nuevo</span></div>
+  <div class="legend"><span><i style="background:var(--primary)"></i>Arranque de turno &mdash; tu prompt (o la primera llamada tras una pausa &ge;30 s)</span><span><i style="background:var(--mid)"></i>Inferencias hermanas &mdash; tool-calls encadenados del mismo turno (&lt;30 s): re-leen el cache ya escrito y escriben solo el resultado de la tool</span></div>
   <div class="chart-wrap">
     <canvas id="claudit-chart-write" height="220" role="img" aria-label="__CLAUDIT_ARIA_WRITE__"></canvas>
   </div>

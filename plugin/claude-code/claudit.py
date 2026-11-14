@@ -88,6 +88,7 @@ CPT_MIN, CPT_MAX = 2.0, 4.0
 PALANCA_ALTA = 1000
 PALANCA_MEDIA = 300
 SECC_MINIMA = 200  # secciones de CLAUDE.md por debajo de esto se colapsan en 'resto'
+SKILLS_TOP = 12  # skills del listado que se muestran una por una; el resto se agrupa
 RING_SLOTS = 11    # subcarpetas .claudit/0_ .. .claudit/10_; la sesion N reusa el slot N % 11
                    # (la sesion 11 pisa la 0, la 12 pisa la 1, ...). El timestamp del nombre
                    # manda para "cual es la ultima"; el numero es el handle visual del slot.
@@ -586,6 +587,28 @@ def secciones_texto(txt, cpt=CHARS_POR_TOKEN):
     return [(t, ch / cpt) for t, ch in tramos]
 
 
+def secciones_skills(txt, cpt=CHARS_POR_TOKEN, top=None):
+    """Corta el skill_listing ('- nombre: descripcion' por skill) en [(nombre, tokens)]:
+    las `top` mas pesadas una por una y el resto agregado al final."""
+    top = SKILLS_TOP if top is None else top
+    items = []
+    for parte in re.split(r"(?m)^(?=- )", txt):
+        if parte.strip():
+            nombre = parte[2:].split(": ", 1)[0].strip() if parte.startswith("- ") else "(preambulo)"
+            items.append((nombre, len(parte) / cpt))
+    items.sort(key=lambda x: -x[1])
+    if len(items) > top:
+        resto = items[top:]
+        items = items[:top] + [(f"resto ({len(resto)} skills)", sum(k for _, k in resto))]
+    return items
+
+
+def secc_hook(txt, cpt=CHARS_POR_TOKEN):
+    """Secciones (# y ##) de la salida de un hook; None si no tiene headers."""
+    secc = secciones_texto(txt, cpt)
+    return secciones_top(secc) if len(secc) > 1 else None
+
+
 def secciones_top(secc):
     """Secciones >= SECC_MINIMA + el 'resto' agregado, TODO ordenado por tokens
     desc (= % setup desc). Como la palanca deriva de los tokens (***>=1000, **>=300,
@@ -690,6 +713,7 @@ def desglose_setup(lineas, filas, cpt_flag=None):
     """
     total = filas[0]["read"] + filas[0]["write"] + filas[0]["input"]
     acum = {}  # (tipo, label) -> [chars, estimado, secc]
+    textos = {}  # (tipo, label) -> texto, para abrir hooks y skill_listing un nivel mas
     memoria = {}  # path -> (tipo, texto), en orden de carga
     forma_vista = False
 
@@ -732,9 +756,13 @@ def desglose_setup(lineas, filas, cpt_flag=None):
                     sumar("agentes", f"agente {nombre}", n)
             elif att.get("hookName"):
                 sumar("hook", etiqueta_hook(att), chars_hook(att))
+                if isinstance(att.get("content"), str):
+                    textos[("hook", etiqueta_hook(att))] = textos.get(("hook", etiqueta_hook(att)), "") + att["content"]
             else:
                 n, tipo, est = chars_adjunto(att)
                 sumar(tipo, _ETIQUETA_ADJUNTO.get(at, at or "adjunto"), n, est)
+                if at == "skill_listing":
+                    textos[(tipo, _ETIQUETA_ADJUNTO[at])] = textos.get((tipo, _ETIQUETA_ADJUNTO[at]), "") + _TXT_ADJUNTO[at](att)
         elif t == "user":
             for b in blocks_de(e):
                 if isinstance(b, dict) and b.get("type") == "text":
@@ -764,7 +792,13 @@ def desglose_setup(lineas, filas, cpt_flag=None):
         comp("memoria", f"{tipo} {abreviar_ruta(path)}", sum(k for _, k in secc),
              secciones_top(secc), estimado=True)
     for (tipo, label), (n, est) in acum.items():
-        comp(tipo, label, ch(n), estimado=est)
+        txt = textos.get((tipo, label))
+        secc = None
+        if txt and tipo == "hook":
+            secc = secc_hook(txt, ratio)
+        elif txt and tipo == "skills":
+            secc = secciones_skills(txt, ratio)
+        comp(tipo, label, ch(n), secc, estimado=est)
 
     medido = sum(c["tok"] for c in comps)
     resto = total - medido

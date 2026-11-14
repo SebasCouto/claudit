@@ -11,6 +11,9 @@
   --ink:hsl(210 20% 92%); --muted:hsl(215 12% 62%); --line:hsl(220 10% 20%);
   --primary:hsl(190 95% 55%); --primary-ink:hsl(220 30% 8%);
   --good:hsl(142 65% 48%); --mid:hsl(38 92% 55%); --bad:hsl(0 72% 60%); --neutral:hsl(215 12% 50%);
+  /* categoricos de Versiones vistas: orden fijo, validados (dataviz) sobre --surface-1 oscuro */
+  --vs-1:#3987e5; --vs-2:#d95926; --vs-3:#199e70; --vs-4:#c98500;
+  --vs-5:#d55181; --vs-6:#008300; --vs-7:#9085e9; --vs-8:#e66767;
   --radius:14px;
   --font-sans:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
   --font-mono:'JetBrains Mono','Consolas',monospace;
@@ -203,6 +206,25 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;}
 .sk-lista .num{text-align:right;}
 .sk-lista td.num{font-family:var(--font-mono);}
 #u-skills h3{margin-top:24px;}
+.vs-grid{display:grid;grid-template-columns:minmax(0,500px) minmax(0,1fr);gap:28px;align-items:start;}
+@media (max-width:1100px){.vs-grid{grid-template-columns:1fr;}}
+.vs-tabla{min-width:0;font-size:13px;}
+.vs-tabla th,.vs-tabla td{text-align:left;padding-left:8px;padding-right:8px;white-space:normal;}
+.vs-tabla td{font-family:var(--font-sans);}
+.vs-tabla td:nth-child(3),.vs-tabla td:nth-child(4){font-family:var(--font-mono);font-size:12px;white-space:nowrap;}
+.vs-tabla td:first-child small{display:block;font-size:11px;}
+.vs-sw,.cal-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--c);margin-right:6px;vertical-align:middle;}
+.vs-cal h4{margin:8px 0 6px;font-size:13px;font-weight:600;}
+.cal-leyenda{list-style:none;display:flex;flex-wrap:wrap;gap:4px 14px;margin:0 0 10px;padding:0;font-size:12px;color:var(--muted);}
+.cal-meses{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:14px;}
+.cal-mes{border-collapse:collapse;font-size:11px;width:100%;}
+.cal-mes caption{text-align:left;font-weight:600;color:var(--ink);font-size:12px;padding-bottom:4px;}
+.cal-mes th{color:var(--muted);font-weight:500;padding:2px 0;}
+.cal-mes td{text-align:center;color:var(--muted);padding:3px 0;height:30px;vertical-align:top;}
+.cal-mes td.cal-ev{color:var(--ink);font-weight:600;cursor:help;border-radius:4px;background:var(--surface-2);}
+.cal-ev:focus-visible{outline:2px solid var(--primary);outline-offset:1px;}
+.cal-dots{display:flex;justify-content:center;gap:2px;margin-top:2px;}
+.cal-dots .cal-dot{width:6px;height:6px;margin:0;box-shadow:0 0 0 1px var(--surface-1);}
 .sk-lista tr[hidden]{display:none;}
 .sk-pag{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;}
 .sk-xlsx{margin-left:auto;border-radius:6px;}
@@ -881,6 +903,11 @@ function claudinSkills(){
 claudinPerfil();
 claudinSkills();
 claudinSesionUso();
+document.querySelectorAll('.cal-ev[data-tip]').forEach(function(c){
+  function ver(e){ var r=c.getBoundingClientRect(); claudinShowTip(e&&e.clientX||r.right, e&&e.clientY||r.top, c.dataset.tipTitle||'', c.dataset.tip); }
+  c.addEventListener('mousemove',ver); c.addEventListener('focus',function(){ver();});
+  c.addEventListener('mouseleave',claudinHideTip); c.addEventListener('blur',claudinHideTip);
+});
 document.querySelectorAll('.h-ayuda[data-tip]').forEach(function(b){
   function ver(e){ var r=b.getBoundingClientRect(); claudinShowTip(e&&e.clientX||r.right, e&&e.clientY||r.top, b.dataset.tipTitle||'', b.dataset.tip); }
   b.addEventListener('mousemove',ver); b.addEventListener('focus',function(){ver();});

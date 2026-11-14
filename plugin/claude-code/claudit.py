@@ -45,11 +45,13 @@
 #
 # Corre igual en macOS/Linux/Windows. Motor unico, sin dependencias externas.
 import base64
+import calendar
 import html
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import urllib.request
@@ -762,6 +764,91 @@ def versiones_cc(listados):
         if version:
             vistas.setdefault(version, ts[:10])
     return list(vistas.items())
+
+
+# Plugins cuya version propia vive en un binario aparte. Lista CERRADA a proposito: ejecutar
+# binarios elegidos por nombre de plugin seria abrir la puerta a correr cualquier cosa.
+BINARIOS_VERSION = {"engram": ["engram", "version"]}
+
+
+def _version_binario(cmd):
+    """Version (x.y.z) que imprime `cmd`; '' si el binario no esta o no responde."""
+    if not shutil.which(cmd[0]):
+        return ""
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    m = re.search(r"\d+\.\d+\.\d+", out or "")
+    return m.group(0) if m else ""
+
+
+def _clave_version(v):
+    return [int(x) if x.isdigit() else 0 for x in re.split(r"[.\-]", v)]
+
+
+def _componente(nombre, version, eventos, fuente):
+    eventos = sorted(eventos)
+    return {"nombre": nombre, "version": version, "desde": eventos[0][0], "actualizada": eventos[-1][0],
+            "fuente": fuente, "eventos": eventos}
+
+
+def _plugins_versiones():
+    """Un componente por plugin de installed_plugins.json (los que haya en ESTA maquina)."""
+    try:
+        data = json.loads((HOME / ".claude" / "plugins" / "installed_plugins.json").read_text("utf-8"))
+        plugins = data.get("plugins") or {}
+    except (OSError, ValueError, AttributeError):
+        return []
+    comps = []
+    for clave in sorted(plugins):
+        inst = [i for i in plugins[clave] or [] if isinstance(i, dict) and i.get("installedAt")]
+        if not inst:
+            continue
+        i = max(inst, key=lambda x: x.get("lastUpdated") or x["installedAt"])
+        nombre, v = clave.split("@", 1)[0], str(i.get("version") or "")
+        eventos = [(i["installedAt"][:10], f"instalado {v}")]
+        if (i.get("lastUpdated") or "")[:10] > eventos[0][0]:
+            eventos.append((i["lastUpdated"][:10], f"actualizado {v}"))
+        binario = _version_binario(BINARIOS_VERSION[nombre]) if nombre in BINARIOS_VERSION else ""
+        version = f"{binario} · plugin {v}" if binario else v
+        comps.append(_componente(nombre, version, eventos, "installed_plugins.json"))
+    return comps
+
+
+def _autores_versiones():
+    """Un componente por autor de ~/.claude/skills: version declarada por skill y dias de instalacion."""
+    grupos = {}
+    for md in sorted((HOME / ".claude" / "skills").glob("*/SKILL.md")):
+        try:
+            dia = datetime.fromtimestamp(md.stat().st_mtime).date().isoformat()
+        except OSError:
+            continue
+        autor, version = _frontmatter(md)
+        g = grupos.setdefault(autor or etiqueta_personales(), {"versiones": set(), "dias": {}})
+        if version:
+            g["versiones"].add(version)
+        g["dias"][dia] = g["dias"].get(dia, 0) + 1
+    comps = []
+    for autor in sorted(grupos, key=str.casefold):
+        g = grupos[autor]
+        vs = sorted(g["versiones"], key=_clave_version)
+        version = (vs[0] if len(vs) == 1 else "por skill: " + ", ".join(vs)) if vs else "sin versión"
+        eventos = [(d, f"{n} skill{'s' if n > 1 else ''} instalada{'s' if n > 1 else ''}/actualizada{'s' if n > 1 else ''}")
+                   for d, n in g["dias"].items()]
+        comps.append(_componente(autor, version, eventos, "~/.claude/skills (fecha de los archivos)"))
+    return comps
+
+
+def componentes_versiones(listados):
+    """Claude Code + plugins + autores de skills, cada uno con su version propia (la que declara
+    quien lo publica) y las fechas en que se vio en ESTA maquina. Todo se detecta en runtime."""
+    comps = []
+    vs = versiones_cc(listados)
+    if vs:
+        comps.append(_componente("Claude Code", vs[-1][0], [(d, v) for v, d in vs],
+                                 "transcripts (primer dia de cada version)"))
+    return comps + _plugins_versiones() + _autores_versiones()
 
 
 def filas_skills(crudas, historial):
@@ -1924,7 +2011,7 @@ def _loop_html(m):
 SKILLS_POR_PAGINA = 12
 
 
-def _skills_html(filas, versiones):
+def _skills_html(filas, componentes):
     """Pestana Skills: cada skill con proveedor/fuente/desde, filtros por proveedor, paginador,
     descarga en Excel y las versiones de Claude Code vistas."""
     if not filas:
@@ -1953,21 +2040,84 @@ def _skills_html(filas, versiones):
            '<button type="button" class="sk-xlsx" id="sk-xlsx">Descargar Excel</button></div>')
     datos = sorted(filas, key=lambda f: (f["proveedor"].casefold(), f["skill"].casefold()))
     js = json.dumps(datos, ensure_ascii=False).replace("</", "<\\/")
-    vers = ('<h3>Versiones de Claude Code vistas</h3><p class="muted">Primer dia en que cada version aparece '
-            'en un transcript local. Claude Code se actualiza solo salvo que <code>autoUpdates</code> este en '
-            'false; el ritmo real se ve en las fechas.</p><table class="setup-tree sk-versiones"><thead><tr>'
-            '<th>Version</th><th>Vista desde</th></tr></thead><tbody>'
-            + "".join(f"<tr><td>{_esc(v)}</td><td>{_esc(d)}</td></tr>" for v, d in versiones)
-            + '</tbody></table>') if versiones else ""
     return (filtros + tabla + nav
-            + f'<script type="application/json" id="claudit-data-skills">{js}</script>' + vers)
+            + f'<script type="application/json" id="claudit-data-skills">{js}</script>'
+            + _versiones_html(componentes))
+
+
+MESES_CORTOS = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+VS_COLORES = 8        # slots categoricos validados (--vs-1..8); mas alla, gris: nunca se recicla un color
+CAL_MAX_MESES = 12
+
+
+def _color_vs(i):
+    return f"var(--vs-{i + 1})" if i < VS_COLORES else "var(--neutral)"
+
+
+def _calendario_html(comps):
+    """Un mini-mes por mes entre el primer y el ultimo evento; cada dia con eventos lleva un punto
+    del color de cada componente y el detalle en tooltip (hover y foco)."""
+    por_dia = {}
+    for i, c in enumerate(comps):
+        for dia, txt in c["eventos"]:
+            por_dia.setdefault(dia, []).append((i, f'{c["nombre"]} {txt}'))
+    if not por_dia:
+        return ""
+    y1, m1 = map(int, min(por_dia)[:7].split("-"))
+    y2, m2 = map(int, max(por_dia)[:7].split("-"))
+    meses = [(y, m) for y in range(y1, y2 + 1) for m in range(1, 13) if (y1, m1) <= (y, m) <= (y2, m2)]
+    cal = calendar.Calendar(firstweekday=0)
+    out = []
+    for y, m in meses[-CAL_MAX_MESES:]:
+        filas = []
+        for semana in cal.monthdayscalendar(y, m):
+            celdas = []
+            for d in semana:
+                dia = f"{y}-{m:02d}-{d:02d}"
+                ev = por_dia.get(dia) if d else None
+                if not d:
+                    celdas.append("<td></td>")
+                elif not ev:
+                    celdas.append(f"<td>{d}</td>")
+                else:
+                    tip = _esc(" · ".join(t for _, t in ev))
+                    puntos = "".join(f'<i class="cal-dot" style="--c:{_color_vs(i)}"></i>' for i, _ in ev)
+                    celdas.append(f'<td class="cal-ev" tabindex="0" data-tip-title="{dia}" data-tip="{tip}" '
+                                  f'aria-label="{dia}: {tip}">{d}<span class="cal-dots">{puntos}</span></td>')
+            filas.append("<tr>" + "".join(celdas) + "</tr>")
+        out.append(f'<table class="cal-mes"><caption>{MESES_CORTOS[m - 1]} {y}</caption><thead><tr>'
+                   + "".join(f'<th scope="col">{x}</th>' for x in "LMMJVSD")
+                   + "</tr></thead><tbody>" + "".join(filas) + "</tbody></table>")
+    leyenda = "".join(f'<li><i class="cal-dot" style="--c:{_color_vs(i)}"></i>{_esc(c["nombre"])}</li>'
+                      for i, c in enumerate(comps))
+    return (f'<div class="vs-cal"><h4>Calendario de versiones en esta máquina</h4>'
+            f'<ul class="cal-leyenda">{leyenda}</ul><div class="cal-meses">{"".join(out)}</div></div>')
+
+
+def _versiones_html(comps):
+    """Versiones vistas: version propia de cada componente (la que declara quien lo publica) y desde
+    cuando corre en ESTA maquina, con calendario mes a mes."""
+    if not comps:
+        return ""
+    fila = lambda i, c: (f'<tr><td><i class="vs-sw" style="--c:{_color_vs(i)}"></i>{_esc(c["nombre"])}'
+                         f'<small class="muted">{_esc(c["fuente"])}</small></td><td>{_esc(c["version"])}</td>'
+                         f'<td>{_esc(c["desde"])}</td><td>{_esc(c["actualizada"])}</td></tr>')
+    tabla = ('<table class="setup-tree vs-tabla"><thead><tr><th>Componente</th><th>Versión</th>'
+             '<th>En esta máquina desde</th><th>Última actualización</th></tr></thead><tbody>'
+             + "".join(fila(i, c) for i, c in enumerate(comps)) + "</tbody></table>")
+    return ('<h3>Versiones vistas</h3><p class="muted">La versión es la que declara cada componente '
+            '(igual en todas las máquinas); las fechas son de <strong>esta</strong> máquina: transcripts '
+            'para Claude Code, <code>installed_plugins.json</code> para plugins y fecha de los archivos para '
+            'las skills de <code>~/.claude/skills</code>, agrupadas por <code>author</code>. "sin versión" = '
+            'el componente no declara una.</p>'
+            f'<div class="vs-grid"><div class="vs-col">{tabla}</div>{_calendario_html(comps)}</div>')
 
 
 def _skills_del_setup_html(setup):
-    """Seccion Skills: las skills del skill_listing de la sesion + historial de todos los transcripts."""
+    """Seccion Skills: las skills del skill_listing de la sesion + versiones vistas en esta maquina."""
     crudas = next((c.get("crudas") or [] for c in setup["componentes"] if c.get("tipo") == "skills"), [])
     listados = escanear_listados()
-    return _skills_html(filas_skills(crudas, historial_skills(listados)), versiones_cc(listados))
+    return _skills_html(filas_skills(crudas, historial_skills(listados)), componentes_versiones(listados))
 
 
 def _tip_sub(c):

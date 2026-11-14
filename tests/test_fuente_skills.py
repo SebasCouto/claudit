@@ -82,7 +82,9 @@ def _filas():
 
 class TestSkillsHtml(unittest.TestCase):
     def setUp(self):
-        self.html = claudit._skills_html(_filas(), [("2.1.282", "2026-09-30"), ("2.1.301", "2026-10-18")])
+        self.html = claudit._skills_html(_filas(), [{"nombre": "Claude Code", "version": "2.1.301", "desde": "2026-09-30",
+                                                     "actualizada": "2026-10-18", "fuente": "transcripts",
+                                                     "eventos": [("2026-09-30", "2.1.282"), ("2026-10-18", "2.1.301")]}])
 
     def test_cada_skill_lleva_proveedor_fuente_y_fecha(self):
         self.assertIn('data-prov="anthropic"', self.html)
@@ -109,7 +111,7 @@ class TestSkillsHtml(unittest.TestCase):
         self.assertNotIn("tip-pag", self.html)
 
     def test_versiones_de_claude_code(self):
-        self.assertIn("2.1.301", self.html.split("sk-versiones")[1])
+        self.assertIn("2.1.301", self.html.split("vs-tabla")[1])
 
     def test_sin_skills_avisa(self):
         self.assertIn("sin skill_listing", claudit._skills_html([], []))
